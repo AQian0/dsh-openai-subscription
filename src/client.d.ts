@@ -88,6 +88,9 @@ interface ReactModule {
     createElement(type: string | SectionComponent, props: Record<string, unknown> | null, ...children: ReactNode[]): ReactElement;
     useState<S>(initial: S): [S, (update: S | ((previous: S) => S)) => void];
     useEffect(effect: () => void | (() => void), deps?: ReadonlyArray<unknown>): void;
+    useRef<T>(initial: T): {
+        current: T;
+    };
 }
 /** Stringify an unknown thrown value for display. */
 declare function messageOf(error: unknown): string;

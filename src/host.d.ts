@@ -12,7 +12,8 @@ interface FlowState {
     done: boolean;
     outcome: 'authorized' | 'cancelled' | 'failed' | null;
     error: string | null;
-    aborted: boolean;
+    controller: AbortController;
+    task: Promise<void> | null;
 }
 /** `openaiSubscription/status` reply. */
 type StatusResult = {
@@ -49,12 +50,9 @@ type PollResult = {
     error: string | null;
 };
 declare class OpenAISubscriptionController extends TypertRemoteService {
-    private _credentials;
-    private _shell;
-    private _timer;
-    private _authorization;
-    private _flowRegistered;
+    private registeredAuthorization;
     private cachedModule;
+    private locatingModule;
     private pendingBridge;
     constructor(ctx: Context);
     private credentials;
@@ -69,8 +67,8 @@ declare class OpenAISubscriptionController extends TypertRemoteService {
      * Mirror the subscription grant into the record the DSH pi-ai LLM adapter
      * resolves for `openai-codex`, in the adapter's own credential shape
      * (`{ type: 'oauth', access, refresh, expires, accountId }` — a grant payload
-     * the adapter passes through verbatim). Best-effort: a mirror failure never
-     * fails the login itself, it only leaves the LLM seam unsigned.
+     * the adapter passes through verbatim). Callers treat a failed write as a
+     * failed authorization rather than reporting success with an unsigned route.
      */
     private mirrorToPiAi;
     /**
@@ -81,6 +79,8 @@ declare class OpenAISubscriptionController extends TypertRemoteService {
      * already-configured non-bare `openai-codex` profile — untouched.
      */
     private ensurePiRoute;
+    /** Remember that the currently bare route was created by this plugin. */
+    private markPiRouteManaged;
     /**
      * On logout, withdraw the bare default route this plugin added — but never
      * a profile the user configured themselves (any non-empty entry). Deleted
