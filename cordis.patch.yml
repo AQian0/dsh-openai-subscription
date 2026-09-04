@@ -1,0 +1,14 @@
+# dsh-openai-subscription bundle patch.
+#
+# Mounts the host half (OpenAISubscriptionController, a cordis class plugin)
+# under the row id `openai-subscription`. Its `dsh.client` declaration in
+# package.json additionally pulls the web settings page into the client module
+# graph, so a single row covers both halves.
+#
+# This patch applies automatically when the package is listed in a profile's
+# `dsh.profile.bundles`; alternatively copy the row into your profile's
+# `cordis.patch.yml` (or pass it as a `--patch` overlay) without listing the
+# package as a bundle.
+- insert:
+    - id: openai-subscription
+      name: 'dsh-openai-subscription'
