@@ -31,10 +31,10 @@ dsh plugin add dsh-openai-subscription
 
 ## 工作原理
 
-1. Host 半区（`src/host.js`）是一个 cordis **类插件**（`TypertRemoteService` 子类），挂载后提供 `openaiSubscription` 服务，并以**源模式**暴露 `openaiSubscription/status | authorize | poll | cancel` 四个 Typert Remote 端点——网关直接从 `@Remote` 标记发现，无需生成 typert 工件
+1. Host 半区（`src/host.ts`，TypeScript 源码，`tsc` 原地编译产出 `src/host.js`）是一个 cordis **类插件**（`TypertRemoteService` 子类），挂载后提供 `openaiSubscription` 服务，并以**源模式**暴露 `openaiSubscription/status | authorize | poll | cancel` 四个 Typert Remote 端点——网关直接从 `@Remote` 标记发现，无需生成 typert 工件
 2. 登录时通过 `shell` 服务起 `node` 子进程，动态导入 DSH 内置的 `@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js`，复用其 `openaiCodexOAuth`（Codex CLI 公开 client + `auth.openai.com` 设备码端点）
 3. 用户打开 `auth.openai.com/codex/device` 用订阅账号登录并输入验证码；插件轮询 `deviceauth/token`，用返回的 authorization code 在 `oauth/token` 交换 access/refresh token
-4. Client 半区（`src/client.js`，`dsh.client` 双面包）在设置页全程展示状态，通过 `connection.rpc.call('/api', 'openaiSubscription/*', { args }, signal)` 调用宿主
+4. Client 半区（`src/client.ts`，`dsh.client` 双面包，原地编译为 `src/client.js`）在设置页全程展示状态，通过 `connection.rpc.call('/api', 'openaiSubscription/*', { args }, signal)` 调用宿主
 
 ## 凭证与安全
 
@@ -54,12 +54,28 @@ dsh plugin add dsh-openai-subscription
 ```
 ├── package.json       # 包元数据；dsh.bundle.patch 与 dsh.client 声明；exports（. / ./host / ./client）
 ├── cordis.patch.yml   # bundle patch：openai-subscription 插件行
+├── tsconfig.json      # TypeScript 配置（严格模式，原地编译到 src/*.js / *.d.ts）
 ├── src/
-│   ├── host.js        # Host 半区：类插件 + 源模式 Typert Remote + OAuth 驱动 + 凭证写入
-│   └── client.js      # Client 半区：__ModuleLoader__ 表 + 设置页 UI + connection RPC
+│   ├── host.ts        # Host 半区：类插件 + 源模式 Typert Remote + OAuth 驱动 + 凭证写入
+│   └── client.ts      # Client 半区：__ModuleLoader__ 表 + 设置页 UI + connection RPC
+│                      # （编译产物 src/host.js / src/client.js / *.d.ts 随源码一起提交）
 ├── LICENSE            # MIT
 └── README.md
 ```
+
+## 开发（本仓库）
+
+源码为 TypeScript；`tsc` 将 `src/*.ts` 原地编译为同名 `.js` / `.d.ts`，运行时入口路径（`package.json` 的 `./src/host.js`、`./src/client.js`）保持稳定，宿主无需感知编译步骤：
+
+```bash
+bun install        # 或 npm install / pnpm install（devDependencies 含类型来源包）
+bun run build      # tsc -p tsconfig.json，产出 src/*.js + *.d.ts
+bun run typecheck  # 仅类型检查，不产出
+```
+
+- **编译产物随源码一起提交**（`src/*.js` / `src/*.d.ts` 入库），不依赖任何 npm 生命周期钩子：`bun` / `pnpm` 默认拦截依赖安装脚本、`npm i --ignore-scripts`、离线 git 安装等场景全部可用。修改 `src/*.ts` 后先 `bun run build` 再把产物与源码一起提交；发布前同样先构建
+- 工具链为 **TypeScript 7**（原生编译器，`typescript@^7.0.2`）；本仓库代码同时通过 tsc 5.9 验证，产物逐字节一致
+- Host 半区类型直接来自 DSH 各接缝包自带的 `.d.ts`（`dsh-credentials` / `dsh-shell` / `dsh-authorization` / `cordis-plugin-timer` / `dsh-typert-protocol`），全部为 devDependencies，不引入运行时依赖
 
 ## 环境要求
 

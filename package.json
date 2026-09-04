@@ -1,14 +1,24 @@
 {
   "name": "dsh-openai-subscription",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "OpenAI (ChatGPT Plus/Pro/Team) subscription sign-in for DeepSeek Harness — device-code OAuth reusing @earendil-works/pi-ai, storing the grant in the DSH credentials service.",
   "type": "module",
   "main": "./src/host.js",
   "exports": {
-    ".": "./src/host.js",
-    "./host": "./src/host.js",
+    ".": {
+      "types": "./src/host.d.ts",
+      "default": "./src/host.js"
+    },
+    "./host": {
+      "types": "./src/host.d.ts",
+      "default": "./src/host.js"
+    },
     "./client": "./src/client.js",
     "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "files": [
     "src",
@@ -46,5 +56,15 @@
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-typert-protocol": "*",
     "@deepseek-ai/dsh-client-connection": "*"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/cordis-plugin-timer": "^1.1.4",
+    "@deepseek-ai/dsh-authorization": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-credentials": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-shell": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-typert-protocol": "^0.1.2-rc.1",
+    "@types/node": "^25.6.1",
+    "typescript": "^7.0.2"
   }
 }
