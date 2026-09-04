@@ -44,6 +44,9 @@ window.__ModuleLoader__.load({
             '.oasub-btn.primary { background: #10a37f; border-color: #10a37f; color: #fff; }',
             '.oasub-err { color: #e5484d; font-size: 13px; }',
             '.oasub-ok { color: #10a37f; font-size: 13px; }',
+            '.oasub-mlist { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }',
+            '.oasub-model { font-size: 12px; line-height: 1; padding: 5px 9px; border-radius: 6px; border: 1px solid rgba(128,128,128,.3); white-space: nowrap; }',
+            '.oasub-model small { opacity: .65; }',
         ].join('\n');
         function ensureCss() {
             const tagId = 'dsh-openai-subscription/settings.css';
@@ -73,12 +76,28 @@ window.__ModuleLoader__.load({
             const [notices, setNotices] = React.useState([]);
             const [error, setError] = React.useState('');
             const [result, setResult] = React.useState(null);
+            const [models, setModels] = React.useState(null);
             React.useEffect(() => {
                 let alive = true;
                 remoteCall(connection, 'status', {}).then((s) => { if (alive)
                     setInfo(s); }).catch(() => { });
                 return () => { alive = false; };
             }, [phase]);
+            React.useEffect(() => {
+                if (!(info && info.configured)) {
+                    setModels(null);
+                    return;
+                }
+                let alive = true;
+                remoteCall(connection, 'models', {}).then((m) => {
+                    if (alive)
+                        setModels(m);
+                }).catch(() => {
+                    if (alive)
+                        setModels(null);
+                });
+                return () => { alive = false; };
+            }, [info, phase]);
             React.useEffect(() => {
                 if (phase !== 'pending')
                     return;
@@ -154,7 +173,9 @@ window.__ModuleLoader__.load({
             const ready = info ? !!info.ready : true;
             const configured = info ? !!info.configured : false;
             const busy = phase === 'pending';
-            return el('div', { className: 'oasub-wrap' }, el('div', { className: 'oasub-title' }, 'OpenAI 订阅登录'), el('div', { className: 'oasub-desc' }, '用 OpenAI（ChatGPT Plus / Pro / Team）订阅账号登录，走官方 OAuth 设备码流程（复用 DSH 内置 @earendil-works/pi-ai 的登录实现）。访问令牌与刷新令牌只保存在本机 DSH 凭证库。'), ready ? null : el('div', { className: 'oasub-err' }, '未找到 DSH 的 pi 依赖（@earendil-works/pi-ai），无法使用订阅登录。'), el('div', { className: 'oasub-card' }, configured ? el('div', { className: 'oasub-ok' }, '已登录 ChatGPT 订阅账号') : el('div', { className: 'oasub-desc' }, '尚未登录 OpenAI 订阅账号'), configured && info && info.accountId ? el('div', { className: 'oasub-desc' }, '账号：' + info.accountId) : null, configured && info && info.expires ? el('div', { className: 'oasub-desc' }, '访问令牌到期：' + new Date(info.expires).toLocaleString()) : null, configured && info && info.loginMethod ? el('div', { className: 'oasub-desc' }, '登录方式：' + info.loginMethod) : null), notices.map((n, i) => el('div', { key: 'n' + i, className: 'oasub-card' }, n.message ? el('div', { className: 'oasub-desc' }, n.message) : null, n.code ? el('div', { className: 'oasub-row' }, el('span', { className: 'oasub-code' }, n.code), n.url ? el('a', { className: 'oasub-link', href: n.url, target: '_blank', rel: 'noreferrer' }, '打开登录页') : null) : null)), error ? el('div', { className: 'oasub-err' }, error) : null, phase === 'done' && result === 'authorized' ? el('div', { className: 'oasub-ok' }, '授权成功，凭证已保存。') : null, phase === 'done' && result === 'cancelled' ? el('div', { className: 'oasub-desc' }, '授权已取消。') : null, info === null ? null : el('div', { className: 'oasub-row' }, configured
+            return el('div', { className: 'oasub-wrap' }, el('div', { className: 'oasub-title' }, 'OpenAI 订阅登录'), el('div', { className: 'oasub-desc' }, '用 OpenAI（ChatGPT Plus / Pro / Team）订阅账号登录，走官方 OAuth 设备码流程（复用 DSH 内置 @earendil-works/pi-ai 的登录实现）。访问令牌与刷新令牌只保存在本机 DSH 凭证库。'), ready ? null : el('div', { className: 'oasub-err' }, '未找到 DSH 的 pi 依赖（@earendil-works/pi-ai），无法使用订阅登录。'), el('div', { className: 'oasub-card' }, configured ? el('div', { className: 'oasub-ok' }, '已登录 ChatGPT 订阅账号') : el('div', { className: 'oasub-desc' }, '尚未登录 OpenAI 订阅账号'), configured && info && info.accountId ? el('div', { className: 'oasub-desc' }, '账号：' + info.accountId) : null, configured && info && info.expires ? el('div', { className: 'oasub-desc' }, '访问令牌到期：' + new Date(info.expires).toLocaleString()) : null, configured && info && info.loginMethod ? el('div', { className: 'oasub-desc' }, '登录方式：' + info.loginMethod) : null), models ? el('div', { className: 'oasub-card' }, el('div', { className: 'oasub-title' }, '可用模型（ChatGPT 订阅）'), models.synced ? el('div', { className: 'oasub-ok' }, '凭证已同步到 DSH 模型凭证（llm-pi-ai/openai-codex）。') : null, models.configured
+                ? el('div', { className: 'oasub-ok' }, 'openai-codex 路由已启用，GPT 系列模型已出现在「设置 → 模型」。')
+                : el('div', { className: 'oasub-desc' }, 'openai-codex 路由未启用：在 ~/.dsh/settings.yaml 的 llm-pi-ai.providers 下添加 openai-codex（热重载生效），GPT 系列模型即出现在「设置 → 模型」。'), models.models && models.models.length ? el('div', { className: 'oasub-mlist' }, models.models.map((m) => el('span', { key: m.id, className: 'oasub-model' }, (m.name || m.id), el('small', null, ' · ' + m.id + (m.contextWindow ? ' · ' + m.contextWindow : '') + (m.modalities === 'text+image' ? ' · 多模态' : ''))))) : null) : null, notices.map((n, i) => el('div', { key: 'n' + i, className: 'oasub-card' }, n.message ? el('div', { className: 'oasub-desc' }, n.message) : null, n.code ? el('div', { className: 'oasub-row' }, el('span', { className: 'oasub-code' }, n.code), n.url ? el('a', { className: 'oasub-link', href: n.url, target: '_blank', rel: 'noreferrer' }, '打开登录页') : null) : null)), error ? el('div', { className: 'oasub-err' }, error) : null, phase === 'done' && result === 'authorized' ? el('div', { className: 'oasub-ok' }, '授权成功，凭证已保存。') : null, phase === 'done' && result === 'cancelled' ? el('div', { className: 'oasub-desc' }, '授权已取消。') : null, info === null ? null : el('div', { className: 'oasub-row' }, configured
                 ? el('button', { className: 'oasub-btn', disabled: busy || !ready, onClick: () => start('refresh') }, busy ? '刷新中…' : '刷新授权')
                 : el('button', { className: 'oasub-btn primary', disabled: busy || !ready, onClick: () => start('device_code') }, busy ? '登录中…' : '使用 OpenAI 账号登录'), configured ? el('button', { className: 'oasub-btn', disabled: busy, onClick: logout }, busy ? '退出中…' : '退出登录') : null, busy ? el('button', { className: 'oasub-btn', onClick: cancel }, '取消') : null));
         }

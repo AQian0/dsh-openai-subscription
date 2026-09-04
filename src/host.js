@@ -30,8 +30,16 @@
 // When the `authorization` service is mounted, the official AuthorizationFlow
 // is registered as well (device-code login / refresh).
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
+import { readFile } from 'node:fs/promises';
 /** Credential-record address this plugin owns: `<scope>/<id>`, scope = plugin name. */
 const KEY = 'dsh-openai-subscription/chatgpt';
+/**
+ * Mirror record address the DSH pi-ai LLM adapter (@deepseek-ai/dsh-llm-pi-ai)
+ * reads for its `openai-codex` catalog route. Storing the subscription grant
+ * here — in the exact pi-ai credential shape — is what makes the GPT models of
+ * the `openai-codex` route resolvable per request without a second sign-in.
+ */
+const PI_AI_RECORD = 'llm-pi-ai/openai-codex';
 const LOCATE_SCRIPT = [
     'set -eu',
     'CAND=""',
@@ -98,7 +106,7 @@ function errorMessage(error) {
  * marker on the class prototype, which is what the Typert gateway reads for
  * source-mode endpoint discovery.
  */
-const REMOTE_METHODS = ['status', 'authorize', 'poll', 'cancel', 'logout'];
+const REMOTE_METHODS = ['status', 'authorize', 'poll', 'cancel', 'logout', 'models'];
 function decorateRemoteMethods(klass, methods) {
     const initializers = [];
     for (const name of methods) {
@@ -290,6 +298,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
             },
         }));
         notify({ message: 'OpenAI 订阅授权成功，凭证已保存。' });
+        await this.mirrorToPiAi(granted);
         return credential;
     }
     async runRefresh(control, notify) {
@@ -368,7 +377,82 @@ class OpenAISubscriptionController extends TypertRemoteService {
             },
         }));
         notify({ message: 'OpenAI 订阅授权已刷新。' });
+        await this.mirrorToPiAi(next);
         return next;
+    }
+    /**
+     * Mirror the subscription grant into the record the DSH pi-ai LLM adapter
+     * resolves for `openai-codex`, in the adapter's own credential shape
+     * (`{ type: 'oauth', access, refresh, expires, accountId }` — a grant payload
+     * the adapter passes through verbatim). Best-effort: a mirror failure never
+     * fails the login itself, it only leaves the LLM seam unsigned.
+     */
+    async mirrorToPiAi(credential) {
+        const credentials = this.credentials();
+        if (credentials === undefined)
+            return;
+        const payload = { type: 'oauth' };
+        if (typeof credential.access === 'string' && credential.access)
+            payload.access = credential.access;
+        if (typeof credential.refresh === 'string' && credential.refresh)
+            payload.refresh = credential.refresh;
+        if (typeof credential.expires === 'number')
+            payload.expires = credential.expires;
+        if (typeof credential.accountId === 'string' && credential.accountId)
+            payload.accountId = credential.accountId;
+        try {
+            await credentials.modifyRecord(PI_AI_RECORD, async () => ({ kind: 'grant', payload }));
+        }
+        catch (error) {
+            console.error('[openai-subscription] mirror to llm-pi-ai/openai-codex failed: ' + errorMessage(error));
+        }
+    }
+    /** Live state of the LLM seam for the subscription route. */
+    async piLLMState() {
+        let synced = false;
+        const credentials = this.credentials();
+        if (credentials !== undefined) {
+            try {
+                synced = (await credentials.readRecord(PI_AI_RECORD))?.kind === 'grant';
+            }
+            catch { }
+        }
+        let configured = false;
+        const llm = this.ctx.get('llm');
+        if (llm !== undefined && typeof llm.listProviders === 'function') {
+            try {
+                configured = llm.listProviders().some((p) => p.id === 'openai-codex');
+            }
+            catch { }
+        }
+        return { synced, configured };
+    }
+    /**
+     * The model catalog pi-ai ships for `openai-codex`, read from the installed
+     * pi-ai dist next to the located auth module. Used as the settings-page list
+     * and as context/metadata enrichment for the live `llm` listing.
+     */
+    async catalogModels() {
+        const modulePath = await this.locateAuthModule();
+        if (!modulePath)
+            return [];
+        const distRoot = modulePath.replace(/[/\\]auth[/\\]oauth[/\\]openai-codex\.js$/, '');
+        try {
+            const text = await readFile(distRoot + '/providers/data/openai-codex.json', 'utf8');
+            const data = JSON.parse(text);
+            const api = data['openai-codex-responses'];
+            if (!api)
+                return [];
+            return Object.entries(api).map(([id, meta]) => ({
+                id,
+                name: typeof meta.name === 'string' ? meta.name : null,
+                contextWindow: typeof meta.contextWindow === 'number' ? meta.contextWindow : null,
+                modalities: Array.isArray(meta.input) && meta.input.includes('image') ? 'text+image' : 'text',
+            }));
+        }
+        catch {
+            return [];
+        }
     }
     beginLogin(method) {
         this.ensureAuthorizationFlow();
@@ -494,8 +578,9 @@ class OpenAISubscriptionController extends TypertRemoteService {
     /**
      * Log out: abort any in-flight authorization (so a still-running driver
      * subprocess cannot re-write the grant after deletion) and remove the stored
-     * credential record. Deleting an absent record is a no-op; afterwards
-     * `status` reports `configured: false` again.
+     * credential record, including the pi-ai mirror, so the LLM seam loses the
+     * subscription credential with the same click. Deleting an absent record is
+     * a no-op; afterwards `status` reports `configured: false` again.
      */
     async logout() {
         if (this.pendingBridge !== null) {
@@ -506,6 +591,12 @@ class OpenAISubscriptionController extends TypertRemoteService {
         if (credentials === undefined)
             throw new Error('openai subscription credentials service unavailable');
         await credentials.deleteRecord(KEY);
+        try {
+            await credentials.deleteRecord(PI_AI_RECORD);
+        }
+        catch (error) {
+            console.error('[openai-subscription] mirror record delete failed: ' + errorMessage(error));
+        }
         const authorization = this.authorization();
         if (authorization !== undefined) {
             try {
@@ -514,6 +605,43 @@ class OpenAISubscriptionController extends TypertRemoteService {
             catch { }
         }
         return { ok: true };
+    }
+    /**
+     * `openaiSubscription/models`: the GPT model list the subscription route
+     * serves. Live route models when `openai-codex` is registered (a
+     * `llm-pi-ai:` settings section exists), otherwise the installed pi-ai
+     * catalog as a preview; `configured` tells the page which case this is.
+     */
+    async models() {
+        const pi = await this.piLLMState();
+        let models = [];
+        if (pi.configured) {
+            const llm = this.ctx.get('llm');
+            if (llm !== undefined && typeof llm.listModels === 'function') {
+                try {
+                    const catalog = new Map((await this.catalogModels()).map((m) => [m.id, m]));
+                    const listed = await llm.listModels('openai-codex');
+                    models = listed.map((m) => {
+                        const fromCatalog = catalog.get(m.id);
+                        const modalities = m.inputModalities
+                            ? (m.inputModalities.includes('image') ? 'text+image' : 'text')
+                            : (fromCatalog?.modalities ?? null);
+                        return {
+                            id: m.id,
+                            name: m.name ?? null,
+                            contextWindow: fromCatalog?.contextWindow ?? null,
+                            modalities,
+                        };
+                    });
+                }
+                catch {
+                    models = [];
+                }
+            }
+        }
+        if (models.length === 0)
+            models = await this.catalogModels();
+        return { provider: 'openai-codex', configured: pi.configured, synced: pi.synced, models };
     }
 }
 decorateRemoteMethods(OpenAISubscriptionController, REMOTE_METHODS);

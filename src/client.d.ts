@@ -24,6 +24,20 @@ interface AuthorizeInfo {
     started?: boolean;
     error?: string;
 }
+/** One model the subscription route can serve. */
+interface ModelBrief {
+    id: string;
+    name?: string | null;
+    contextWindow?: number | null;
+    modalities?: 'text' | 'text+image' | null;
+}
+/** `openaiSubscription/models` reply. */
+interface ModelsInfo {
+    provider?: string;
+    configured?: boolean;
+    synced?: boolean;
+    models?: ModelBrief[];
+}
 /** Envelope of `connection.rpc.call`. */
 interface RemoteResult<T> {
     ok?: boolean;
