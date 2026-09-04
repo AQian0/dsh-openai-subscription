@@ -7,7 +7,7 @@
 - 设置页新增「**OpenAI 订阅登录**」入口：一键发起登录、显示设备验证码与登录链接、取消、结果反馈
 - 登录成功后展示账号 ID 与访问令牌到期时间
 - 「刷新授权」按钮：用 refresh token 静默续期
-- 凭证以 `kind: grant` 记录写入 DSH 凭证库（key：`openai.subscription`），不落明文到仓库或配置文件之外
+- 凭证以 `kind: grant` 记录写入 DSH 凭证库（key：`dsh-openai-subscription/chatgpt`），不落明文到仓库或配置文件之外
 - 若宿主组合挂载了 `authorization` 服务，同时注册官方 `AuthorizationFlow`（设备码登录 / 刷新）
 
 ## 安装（组合级挂载）
@@ -38,11 +38,11 @@ dsh plugin add dsh-openai-subscription
 
 ## 凭证与安全
 
-- 存储位置：`~/.dsh/.credentials.yaml` 的 `records.openai.subscription`，`kind: grant`，payload 字段：`provider / loginMethod / accountId / access / refresh / expires / obtainedAt / refreshedAt`
+- 存储位置：`~/.dsh/.credentials.yaml` 的 `records.dsh-openai-subscription/chatgpt`，`kind: grant`，payload 字段：`provider / loginMethod / accountId / access / refresh / expires / obtainedAt / refreshedAt`
 - 消费方读取方式（宿主插件内）：
 
   ```js
-  const record = await ctx.get('credentials').readRecord('openai.subscription')
+  const record = await ctx.get('credentials').readRecord('dsh-openai-subscription/chatgpt')
   // record.payload: { access, refresh, expires, accountId, ... }
   ```
 
@@ -69,7 +69,7 @@ dsh plugin add dsh-openai-subscription
 
 ## 路线图
 
-- [ ] 凭证 key 迁移为更长的命名空间（如 `openai-subscription/chatgpt`），兼容旧 key
+- [x] 凭证 key 迁移为 `<scope>/<id>` 命名空间（`dsh-openai-subscription/chatgpt`），旧点号 key 已不再被 DSH 接受
 - [ ] 增加浏览器登录方式（localhost 回调）作为设备码的备选
 - [ ] 严格模式 typert 工件（`./typert` / `./remote` + zod codec）替代源模式
 

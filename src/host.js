@@ -19,14 +19,16 @@
 // subprocess imports `dist/auth/oauth/openai-codex.js` and drives the
 // device-code flow (deviceauth/usercode -> user login -> deviceauth/token ->
 // oauth/token exchange). Credentials are committed to the DSH credentials
-// service under the key `openai.subscription` (kind: grant).
+// service under the key `dsh-openai-subscription/chatgpt` (kind: grant);
+// record keys must be `<scope>/<id>`, where scope is the owning plugin's
+// registered name.
 //
 // When the `authorization` service is mounted, the official AuthorizationFlow
 // is registered as well (device-code login / refresh).
 
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 
-const KEY = 'openai.subscription'
+const KEY = 'dsh-openai-subscription/chatgpt'
 
 const LOCATE_SCRIPT = [
   'set -eu',
@@ -112,19 +114,54 @@ function decorateRemoteMethods(klass, methods) {
 class OpenAISubscriptionController extends TypertRemoteService {
   constructor(ctx) {
     super(ctx, 'openaiSubscription', { namespace: 'openaiSubscription' })
-    this.credentials = this.ctx.get('credentials')
-    this.shell = this.ctx.get('shell')
-    this.timer = this.ctx.get('timer')
-    this.authorization = this.ctx.get('authorization')
+    // NOTE: services are resolved lazily (below), never captured here. The
+    // loader activates rows by service availability and this plugin declares
+    // no inject, so `shell`/`timer`/... may not be mounted yet while the
+    // constructor runs — capturing them now would freeze `undefined` forever.
+    this._credentials = undefined
+    this._shell = undefined
+    this._timer = undefined
+    this._authorization = undefined
+    this._flowRegistered = false
     this.cachedModule = null
     this.pendingBridge = null
-    if (this.authorization !== undefined) this.registerAuthorizationFlow()
+  }
+
+  credentials() {
+    if (this._credentials === undefined) this._credentials = this.ctx.get('credentials')
+    return this._credentials
+  }
+
+  shell() {
+    if (this._shell === undefined) this._shell = this.ctx.get('shell')
+    return this._shell
+  }
+
+  timer() {
+    if (this._timer === undefined) this._timer = this.ctx.get('timer')
+    return this._timer
+  }
+
+  authorization() {
+    if (this._authorization === undefined) this._authorization = this.ctx.get('authorization')
+    return this._authorization
+  }
+
+  ensureAuthorizationFlow() {
+    const authorization = this.authorization()
+    if (this._flowRegistered || authorization === undefined) return
+    this.registerAuthorizationFlow(authorization)
   }
 
   async locateAuthModule() {
     if (this.cachedModule !== null) return this.cachedModule
-    const spec = this.shell.resolve({ command: LOCATE_SCRIPT, timeoutMs: 20000, stdoutMaxBytes: 4096 })
-    const result = await this.shell.run(spec)
+    const shell = this.shell()
+    if (shell === undefined) {
+      console.error('[openai-subscription] shell service is not mounted; device login is unavailable')
+      return ''
+    }
+    const spec = shell.resolve({ command: LOCATE_SCRIPT, timeoutMs: 20000, stdoutMaxBytes: 4096 })
+    const result = await shell.run(spec)
     if (result.exitCode === 0) {
       const path = (result.stdout.text || '').trim()
       if (path) { this.cachedModule = path; return path }
@@ -140,13 +177,13 @@ class OpenAISubscriptionController extends TypertRemoteService {
       throw new Error('openai subscription auth module not found')
     }
     notify({ message: '正在向 OpenAI 请求设备登录码…' })
-    const spec = this.shell.resolve({
+    const spec = this.shell().resolve({
       command: 'node --input-type=module - ' + this.shq(modulePath),
       timeoutMs: 16 * 60 * 1000,
       stdoutMaxBytes: 262144,
       stdin: DRIVER_DEVICE,
     })
-    const proc = this.shell.start(spec)
+    const proc = this.shell().start(spec)
     let buffer = ''
     let credential = null
     let failure = null
@@ -178,7 +215,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
       if (credential === null && failure === null) {
         if (Date.now() > deadline) { failure = '登录超时（15 分钟）'; break }
         if (proc.status !== 'running') { failure = '登录进程意外退出'; break }
-        await this.timer.timeout(1000)
+        await this.timer().timeout(1000)
       }
     }
     if (failure !== null) {
@@ -188,7 +225,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
       notify({ message: '登录失败：' + failure + hint })
       throw new Error('openai subscription login failed: ' + failure)
     }
-    await this.credentials.modifyRecord(KEY, () => ({
+    await this.credentials().modifyRecord(KEY, () => ({
       kind: 'grant',
       payload: {
         provider: 'openai',
@@ -205,7 +242,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
   }
 
   async runRefresh(control, notify) {
-    const current = await this.credentials.readRecord(KEY)
+    const current = await this.credentials().readRecord(KEY)
     if (current === undefined || current.kind !== 'grant') {
       notify({ message: '还没有 OpenAI 订阅授权记录，请先使用“设备码登录”。' })
       throw new Error('no openai subscription record to refresh')
@@ -221,7 +258,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
       throw new Error('openai subscription auth module not found')
     }
     notify({ message: '正在刷新 OpenAI 订阅授权…' })
-    const spec = this.shell.resolve({
+    const spec = this.shell().resolve({
       command: 'node --input-type=module - ' + this.shq(modulePath),
       timeoutMs: 120000,
       stdoutMaxBytes: 65536,
@@ -235,7 +272,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
         }),
       },
     })
-    const result = await this.shell.run(spec)
+    const result = await this.shell().run(spec)
     if (result.aborted || control.aborted()) return null
     let msg = null
     if (result.exitCode === 0) {
@@ -253,7 +290,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
       throw new Error('openai subscription refresh failed: ' + String(detail).slice(0, 300))
     }
     const next = msg.credential
-    await this.credentials.modifyRecord(KEY, () => ({
+    await this.credentials().modifyRecord(KEY, () => ({
       kind: 'grant',
       payload: {
         provider: 'openai',
@@ -271,6 +308,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
   }
 
   beginLogin(method) {
+    this.ensureAuthorizationFlow()
     if (this.pendingBridge !== null) {
       if (this.pendingBridge.done) this.pendingBridge = null
       else return { started: false, error: '已有一个进行中的授权流程' }
@@ -297,7 +335,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
         state.error = String(error && error.message ? error.message : error)
       } finally {
         state.done = true
-        this.timer.timeout(30000).then(() => {
+        this.timer().timeout(30000).then(() => {
           if (this.pendingBridge === state) this.pendingBridge = null
         })
       }
@@ -305,9 +343,10 @@ class OpenAISubscriptionController extends TypertRemoteService {
     return { started: true }
   }
 
-  registerAuthorizationFlow() {
+  registerAuthorizationFlow(authorization) {
+    if (this._flowRegistered) return
     try {
-      this.authorization.registerFlow({
+      authorization.registerFlow({
         key: KEY,
         label: 'OpenAI 订阅账号（ChatGPT Plus / Pro / Team）',
         methods: [
@@ -322,6 +361,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
           throw new Error('未知的登录方式：' + session.method)
         },
       })
+      this._flowRegistered = true
     } catch (error) {
       console.error('[openai-subscription] registerFlow failed: ' + String(error && error.message ? error.message : error))
     }
@@ -332,8 +372,9 @@ class OpenAISubscriptionController extends TypertRemoteService {
   }
 
   async status() {
+    this.ensureAuthorizationFlow()
     const modulePath = await this.locateAuthModule()
-    const record = await this.credentials.readRecord(KEY)
+    const record = await this.credentials().readRecord(KEY)
     if (record === undefined || record.kind !== 'grant') {
       return { configured: false, ready: !!modulePath }
     }
@@ -367,7 +408,8 @@ class OpenAISubscriptionController extends TypertRemoteService {
 
   async cancel() {
     if (this.pendingBridge !== null) this.pendingBridge.aborted = true
-    if (this.authorization !== undefined) { try { this.authorization.cancel(KEY) } catch {} }
+    const authorization = this.authorization()
+    if (authorization !== undefined) { try { authorization.cancel(KEY) } catch {} }
     return { ok: true }
   }
 }
