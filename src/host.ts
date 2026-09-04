@@ -177,7 +177,7 @@ function errorMessage(error: unknown): string {
  * marker on the class prototype, which is what the Typert gateway reads for
  * source-mode endpoint discovery.
  */
-const REMOTE_METHODS = ['status', 'authorize', 'poll', 'cancel'] as const
+const REMOTE_METHODS = ['status', 'authorize', 'poll', 'cancel', 'logout'] as const
 
 /** The subset of the standard method-decorator context the `Remote` marker path consumes. */
 interface MarkerContext {
@@ -527,6 +527,25 @@ class OpenAISubscriptionController extends TypertRemoteService {
 
   async cancel(): Promise<{ ok: true }> {
     if (this.pendingBridge !== null) this.pendingBridge.aborted = true
+    const authorization = this.authorization()
+    if (authorization !== undefined) { try { authorization.cancel(KEY) } catch {} }
+    return { ok: true }
+  }
+
+  /**
+   * Log out: abort any in-flight authorization (so a still-running driver
+   * subprocess cannot re-write the grant after deletion) and remove the stored
+   * credential record. Deleting an absent record is a no-op; afterwards
+   * `status` reports `configured: false` again.
+   */
+  async logout(): Promise<{ ok: true }> {
+    if (this.pendingBridge !== null) {
+      this.pendingBridge.aborted = true
+      this.pendingBridge = null
+    }
+    const credentials = this.credentials()
+    if (credentials === undefined) throw new Error('openai subscription credentials service unavailable')
+    await credentials.deleteRecord(KEY)
     const authorization = this.authorization()
     if (authorization !== undefined) { try { authorization.cancel(KEY) } catch {} }
     return { ok: true }

@@ -140,10 +140,23 @@ window.__ModuleLoader__.load({
                 });
             };
             const cancel = () => { remoteCall(connection, 'cancel', {}).catch(() => { }); };
+            const logout = () => {
+                if (busy)
+                    return;
+                remoteCall(connection, 'logout', {}).then(() => remoteCall(connection, 'status', {})).then((s) => {
+                    setInfo(s);
+                    setError('');
+                    setResult(null);
+                }).catch((e) => {
+                    setError(messageOf(e));
+                });
+            };
             const ready = info ? !!info.ready : true;
             const configured = info ? !!info.configured : false;
             const busy = phase === 'pending';
-            return el('div', { className: 'oasub-wrap' }, el('div', { className: 'oasub-title' }, 'OpenAI 订阅登录'), el('div', { className: 'oasub-desc' }, '用 OpenAI（ChatGPT Plus / Pro / Team）订阅账号登录，走官方 OAuth 设备码流程（复用 DSH 内置 @earendil-works/pi-ai 的登录实现）。访问令牌与刷新令牌只保存在本机 DSH 凭证库。'), ready ? null : el('div', { className: 'oasub-err' }, '未找到 DSH 的 pi 依赖（@earendil-works/pi-ai），无法使用订阅登录。'), el('div', { className: 'oasub-card' }, configured ? el('div', { className: 'oasub-ok' }, '已登录 ChatGPT 订阅账号') : el('div', { className: 'oasub-desc' }, '尚未登录 OpenAI 订阅账号'), configured && info && info.accountId ? el('div', { className: 'oasub-desc' }, '账号：' + info.accountId) : null, configured && info && info.expires ? el('div', { className: 'oasub-desc' }, '访问令牌到期：' + new Date(info.expires).toLocaleString()) : null, configured && info && info.loginMethod ? el('div', { className: 'oasub-desc' }, '登录方式：' + info.loginMethod) : null), notices.map((n, i) => el('div', { key: 'n' + i, className: 'oasub-card' }, n.message ? el('div', { className: 'oasub-desc' }, n.message) : null, n.code ? el('div', { className: 'oasub-row' }, el('span', { className: 'oasub-code' }, n.code), n.url ? el('a', { className: 'oasub-link', href: n.url, target: '_blank', rel: 'noreferrer' }, '打开登录页') : null) : null)), error ? el('div', { className: 'oasub-err' }, error) : null, phase === 'done' && result === 'authorized' ? el('div', { className: 'oasub-ok' }, '授权成功，凭证已保存。') : null, phase === 'done' && result === 'cancelled' ? el('div', { className: 'oasub-desc' }, '授权已取消。') : null, el('div', { className: 'oasub-row' }, el('button', { className: 'oasub-btn primary', disabled: busy || !ready, onClick: () => start('device_code') }, busy ? '登录中…' : '使用 OpenAI 账号登录'), configured ? el('button', { className: 'oasub-btn', disabled: busy || !ready, onClick: () => start('refresh') }, '刷新授权') : null, busy ? el('button', { className: 'oasub-btn', onClick: cancel }, '取消') : null));
+            return el('div', { className: 'oasub-wrap' }, el('div', { className: 'oasub-title' }, 'OpenAI 订阅登录'), el('div', { className: 'oasub-desc' }, '用 OpenAI（ChatGPT Plus / Pro / Team）订阅账号登录，走官方 OAuth 设备码流程（复用 DSH 内置 @earendil-works/pi-ai 的登录实现）。访问令牌与刷新令牌只保存在本机 DSH 凭证库。'), ready ? null : el('div', { className: 'oasub-err' }, '未找到 DSH 的 pi 依赖（@earendil-works/pi-ai），无法使用订阅登录。'), el('div', { className: 'oasub-card' }, configured ? el('div', { className: 'oasub-ok' }, '已登录 ChatGPT 订阅账号') : el('div', { className: 'oasub-desc' }, '尚未登录 OpenAI 订阅账号'), configured && info && info.accountId ? el('div', { className: 'oasub-desc' }, '账号：' + info.accountId) : null, configured && info && info.expires ? el('div', { className: 'oasub-desc' }, '访问令牌到期：' + new Date(info.expires).toLocaleString()) : null, configured && info && info.loginMethod ? el('div', { className: 'oasub-desc' }, '登录方式：' + info.loginMethod) : null), notices.map((n, i) => el('div', { key: 'n' + i, className: 'oasub-card' }, n.message ? el('div', { className: 'oasub-desc' }, n.message) : null, n.code ? el('div', { className: 'oasub-row' }, el('span', { className: 'oasub-code' }, n.code), n.url ? el('a', { className: 'oasub-link', href: n.url, target: '_blank', rel: 'noreferrer' }, '打开登录页') : null) : null)), error ? el('div', { className: 'oasub-err' }, error) : null, phase === 'done' && result === 'authorized' ? el('div', { className: 'oasub-ok' }, '授权成功，凭证已保存。') : null, phase === 'done' && result === 'cancelled' ? el('div', { className: 'oasub-desc' }, '授权已取消。') : null, info === null ? null : el('div', { className: 'oasub-row' }, configured
+                ? el('button', { className: 'oasub-btn', disabled: busy || !ready, onClick: () => start('refresh') }, busy ? '刷新中…' : '刷新授权')
+                : el('button', { className: 'oasub-btn primary', disabled: busy || !ready, onClick: () => start('device_code') }, busy ? '登录中…' : '使用 OpenAI 账号登录'), configured ? el('button', { className: 'oasub-btn', disabled: busy, onClick: logout }, busy ? '退出中…' : '退出登录') : null, busy ? el('button', { className: 'oasub-btn', onClick: cancel }, '取消') : null));
         }
         function apply(ctx) {
             const slots = ctx.get('slots');

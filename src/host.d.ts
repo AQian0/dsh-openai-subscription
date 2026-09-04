@@ -74,5 +74,14 @@ declare class OpenAISubscriptionController extends TypertRemoteService {
     cancel(): Promise<{
         ok: true;
     }>;
+    /**
+     * Log out: abort any in-flight authorization (so a still-running driver
+     * subprocess cannot re-write the grant after deletion) and remove the stored
+     * credential record. Deleting an absent record is a no-op; afterwards
+     * `status` reports `configured: false` again.
+     */
+    logout(): Promise<{
+        ok: true;
+    }>;
 }
 export default OpenAISubscriptionController;

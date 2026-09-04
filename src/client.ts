@@ -252,6 +252,19 @@ window.__ModuleLoader__.load({
 
       const cancel = () => { remoteCall(connection, 'cancel', {}).catch(() => {}); };
 
+      const logout = () => {
+        if (busy) return;
+        remoteCall(connection, 'logout', {}).then(() =>
+          remoteCall<StatusInfo>(connection, 'status', {}),
+        ).then((s) => {
+          setInfo(s);
+          setError('');
+          setResult(null);
+        }).catch((e) => {
+          setError(messageOf(e));
+        });
+      };
+
       const ready = info ? !!info.ready : true;
       const configured = info ? !!info.configured : false;
       const busy = phase === 'pending';
@@ -276,9 +289,11 @@ window.__ModuleLoader__.load({
         error ? el('div', { className: 'oasub-err' }, error) : null,
         phase === 'done' && result === 'authorized' ? el('div', { className: 'oasub-ok' }, '授权成功，凭证已保存。') : null,
         phase === 'done' && result === 'cancelled' ? el('div', { className: 'oasub-desc' }, '授权已取消。') : null,
-        el('div', { className: 'oasub-row' },
-          el('button', { className: 'oasub-btn primary', disabled: busy || !ready, onClick: () => start('device_code') }, busy ? '登录中…' : '使用 OpenAI 账号登录'),
-          configured ? el('button', { className: 'oasub-btn', disabled: busy || !ready, onClick: () => start('refresh') }, '刷新授权') : null,
+        info === null ? null : el('div', { className: 'oasub-row' },
+          configured
+            ? el('button', { className: 'oasub-btn', disabled: busy || !ready, onClick: () => start('refresh') }, busy ? '刷新中…' : '刷新授权')
+            : el('button', { className: 'oasub-btn primary', disabled: busy || !ready, onClick: () => start('device_code') }, busy ? '登录中…' : '使用 OpenAI 账号登录'),
+          configured ? el('button', { className: 'oasub-btn', disabled: busy, onClick: logout }, busy ? '退出中…' : '退出登录') : null,
           busy ? el('button', { className: 'oasub-btn', onClick: cancel }, '取消') : null,
         ),
       );

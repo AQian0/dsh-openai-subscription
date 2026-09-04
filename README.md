@@ -5,7 +5,7 @@
 ## 功能
 
 - 设置页新增「**OpenAI 订阅登录**」入口：一键发起登录、显示设备验证码与登录链接、取消、结果反馈
-- 登录成功后展示账号 ID 与访问令牌到期时间
+- 登录成功后展示账号 ID 与访问令牌到期时间，此时隐藏「使用 OpenAI 账号登录」按钮，并提供「退出登录」清除本机凭证
 - 「刷新授权」按钮：用 refresh token 静默续期
 - 凭证以 `kind: grant` 记录写入 DSH 凭证库（key：`dsh-openai-subscription/chatgpt`），不落明文到仓库或配置文件之外
 - 若宿主组合挂载了 `authorization` 服务，同时注册官方 `AuthorizationFlow`（设备码登录 / 刷新）
@@ -31,7 +31,7 @@ dsh plugin add dsh-openai-subscription
 
 ## 工作原理
 
-1. Host 半区（`src/host.ts`，TypeScript 源码，`tsc` 原地编译产出 `src/host.js`）是一个 cordis **类插件**（`TypertRemoteService` 子类），挂载后提供 `openaiSubscription` 服务，并以**源模式**暴露 `openaiSubscription/status | authorize | poll | cancel` 四个 Typert Remote 端点——网关直接从 `@Remote` 标记发现，无需生成 typert 工件
+1. Host 半区（`src/host.ts`，TypeScript 源码，`tsc` 原地编译产出 `src/host.js`）是一个 cordis **类插件**（`TypertRemoteService` 子类），挂载后提供 `openaiSubscription` 服务，并以**源模式**暴露 `openaiSubscription/status | authorize | poll | cancel | logout` 五个 Typert Remote 端点——网关直接从 `@Remote` 标记发现，无需生成 typert 工件
 2. 登录时通过 `shell` 服务起 `node` 子进程，动态导入 DSH 内置的 `@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js`，复用其 `openaiCodexOAuth`（Codex CLI 公开 client + `auth.openai.com` 设备码端点）
 3. 用户打开 `auth.openai.com/codex/device` 用订阅账号登录并输入验证码；插件轮询 `deviceauth/token`，用返回的 authorization code 在 `oauth/token` 交换 access/refresh token
 4. Client 半区（`src/client.ts`，`dsh.client` 双面包，原地编译为 `src/client.js`）在设置页全程展示状态，通过 `connection.rpc.call('/api', 'openaiSubscription/*', { args }, signal)` 调用宿主
