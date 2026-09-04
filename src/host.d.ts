@@ -48,22 +48,6 @@ type PollResult = {
     outcome: FlowState['outcome'];
     error: string | null;
 };
-/** One model the subscription route can serve, detached for the settings page. */
-interface ModelBrief {
-    id: string;
-    name: string | null;
-    contextWindow: number | null;
-    modalities: 'text' | 'text+image' | null;
-}
-/** `openaiSubscription/models` reply. */
-interface ModelsResult {
-    provider: 'openai-codex';
-    /** Route is registered live (a `llm-pi-ai.providers.openai-codex` settings section exists). */
-    configured: boolean;
-    /** Mirror credential record is present, so requests can resolve it. */
-    synced: boolean;
-    models: ModelBrief[];
-}
 declare class OpenAISubscriptionController extends TypertRemoteService {
     private _credentials;
     private _shell;
@@ -89,14 +73,21 @@ declare class OpenAISubscriptionController extends TypertRemoteService {
      * fails the login itself, it only leaves the LLM seam unsigned.
      */
     private mirrorToPiAi;
-    /** Live state of the LLM seam for the subscription route. */
-    private piLLMState;
     /**
-     * The model catalog pi-ai ships for `openai-codex`, read from the installed
-     * pi-ai dist next to the located auth module. Used as the settings-page list
-     * and as context/metadata enrichment for the live `llm` listing.
+     * Silently enable the DSH pi-ai adapter's `openai-codex` route, so the GPT
+     * catalog models appear in the model picker without the user editing
+     * settings by hand. Path-addressed `mutate` (`providers/openai-codex`,
+     * namespace `llm-pi-ai`, hot-reloaded) leaves every other provider — and any
+     * already-configured non-bare `openai-codex` profile — untouched.
      */
-    private catalogModels;
+    private ensurePiRoute;
+    /**
+     * On logout, withdraw the bare default route this plugin added — but never
+     * a profile the user configured themselves (any non-empty entry). Deleted
+     * with the credentials so a logged-out state does not leave GPT models
+     * listed that can no longer resolve a credential.
+     */
+    private removePiRouteIfBare;
     private beginLogin;
     private registerAuthorizationFlow;
     private shq;
@@ -110,18 +101,14 @@ declare class OpenAISubscriptionController extends TypertRemoteService {
      * Log out: abort any in-flight authorization (so a still-running driver
      * subprocess cannot re-write the grant after deletion) and remove the stored
      * credential record, including the pi-ai mirror, so the LLM seam loses the
-     * subscription credential with the same click. Deleting an absent record is
-     * a no-op; afterwards `status` reports `configured: false` again.
+     * subscription credential with the same click. The bare `openai-codex`
+     * route this plugin enabled is withdrawn as well (never a user-configured
+     * profile), so a logged-out state does not list models that cannot resolve
+     * a credential. Deleting an absent record is a no-op; afterwards `status`
+     * reports `configured: false` again.
      */
     logout(): Promise<{
         ok: true;
     }>;
-    /**
-     * `openaiSubscription/models`: the GPT model list the subscription route
-     * serves. Live route models when `openai-codex` is registered (a
-     * `llm-pi-ai:` settings section exists), otherwise the installed pi-ai
-     * catalog as a preview; `configured` tells the page which case this is.
-     */
-    models(): Promise<ModelsResult>;
 }
 export default OpenAISubscriptionController;

@@ -50,22 +50,6 @@ interface AuthorizeInfo {
   error?: string
 }
 
-/** One model the subscription route can serve. */
-interface ModelBrief {
-  id: string
-  name?: string | null
-  contextWindow?: number | null
-  modalities?: 'text' | 'text+image' | null
-}
-
-/** `openaiSubscription/models` reply. */
-interface ModelsInfo {
-  provider?: string
-  configured?: boolean
-  synced?: boolean
-  models?: ModelBrief[]
-}
-
 /** Envelope of `connection.rpc.call`. */
 interface RemoteResult<T> {
   ok?: boolean
@@ -170,9 +154,6 @@ window.__ModuleLoader__.load({
       '.oasub-btn.primary { background: #10a37f; border-color: #10a37f; color: #fff; }',
       '.oasub-err { color: #e5484d; font-size: 13px; }',
       '.oasub-ok { color: #10a37f; font-size: 13px; }',
-      '.oasub-mlist { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }',
-      '.oasub-model { font-size: 12px; line-height: 1; padding: 5px 9px; border-radius: 6px; border: 1px solid rgba(128,128,128,.3); white-space: nowrap; }',
-      '.oasub-model small { opacity: .65; }',
     ].join('\n');
 
     function ensureCss(): void {
@@ -205,24 +186,12 @@ window.__ModuleLoader__.load({
       const [notices, setNotices] = React.useState<FlowNotice[]>([]);
       const [error, setError] = React.useState('');
       const [result, setResult] = React.useState<string | null>(null);
-      const [models, setModels] = React.useState<ModelsInfo | null>(null);
 
       React.useEffect(() => {
         let alive = true;
         remoteCall<StatusInfo>(connection, 'status', {}).then((s) => { if (alive) setInfo(s) }).catch(() => {});
         return () => { alive = false };
       }, [phase]);
-
-      React.useEffect(() => {
-        if (!(info && info.configured)) { setModels(null); return; }
-        let alive = true;
-        remoteCall<ModelsInfo>(connection, 'models', {}).then((m) => {
-          if (alive) setModels(m);
-        }).catch(() => {
-          if (alive) setModels(null);
-        });
-        return () => { alive = false };
-      }, [info, phase]);
 
       React.useEffect(() => {
         if (phase !== 'pending') return;
@@ -310,19 +279,6 @@ window.__ModuleLoader__.load({
           configured && info && info.expires ? el('div', { className: 'oasub-desc' }, '访问令牌到期：' + new Date(info.expires).toLocaleString()) : null,
           configured && info && info.loginMethod ? el('div', { className: 'oasub-desc' }, '登录方式：' + info.loginMethod) : null,
         ),
-        models ? el('div', { className: 'oasub-card' },
-          el('div', { className: 'oasub-title' }, '可用模型（ChatGPT 订阅）'),
-          models.synced ? el('div', { className: 'oasub-ok' }, '凭证已同步到 DSH 模型凭证（llm-pi-ai/openai-codex）。') : null,
-          models.configured
-            ? el('div', { className: 'oasub-ok' }, 'openai-codex 路由已启用，GPT 系列模型已出现在「设置 → 模型」。')
-            : el('div', { className: 'oasub-desc' }, 'openai-codex 路由未启用：在 ~/.dsh/settings.yaml 的 llm-pi-ai.providers 下添加 openai-codex（热重载生效），GPT 系列模型即出现在「设置 → 模型」。'),
-          models.models && models.models.length ? el('div', { className: 'oasub-mlist' },
-            models.models.map((m) => el('span', { key: m.id, className: 'oasub-model' },
-              (m.name || m.id),
-              el('small', null, ' · ' + m.id + (m.contextWindow ? ' · ' + m.contextWindow : '') + (m.modalities === 'text+image' ? ' · 多模态' : '')),
-            )),
-          ) : null,
-        ) : null,
         notices.map((n, i) => el('div', { key: 'n' + i, className: 'oasub-card' },
           n.message ? el('div', { className: 'oasub-desc' }, n.message) : null,
           n.code ? el('div', { className: 'oasub-row' },

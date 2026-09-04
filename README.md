@@ -7,21 +7,10 @@
 - 设置页新增「**OpenAI 订阅登录**」入口：一键发起登录、显示设备验证码与登录链接、取消、结果反馈
 - 登录成功后展示账号 ID 与访问令牌到期时间，此时隐藏「使用 OpenAI 账号登录」按钮，并提供「退出登录」清除本机凭证
 - 「刷新授权」按钮：用 refresh token 静默续期
-- **登录即接通模型列表**：授权成功/刷新时把订阅凭证按 pi-ai 的形状镜像写入 `llm-pi-ai/openai-codex`（DSH 官方 `dsh-llm-pi-ai` 适配器按请求解析的地址），退出登录时同步删除；设置页展示 GPT 模型可用列表（catalog 预览 / 已注册路由的实时清单）与路由启用引导
+- **登录即接通模型列表（全自动）**：授权/刷新成功时把订阅凭证按 pi-ai 的形状镜像写入 `llm-pi-ai/openai-codex`（DSH 官方 `dsh-llm-pi-ai` 适配器按请求解析的地址），并通过设置服务静默添加 `llm-pi-ai.providers.openai-codex`（热重载）——二者都不需要用户手动改配置，登录后 GPT 系列模型直接出现在模型选择器，在窗口内切换即可
+- 退出登录时：删除本机凭证与镜像，并撤回本插件添加的默认路由（用户自定义的空路由配置除外），模型列表随之消失
 - 凭证以 `kind: grant` 记录写入 DSH 凭证库（key：`dsh-openai-subscription/chatgpt`），不落明文到仓库或配置文件之外
 - 若宿主组合挂载了 `authorization` 服务，同时注册官方 `AuthorizationFlow`（设备码登录 / 刷新）
-
-### 让 GPT 系列出现在模型选择器
-
-本插件负责「登录并交付凭证」，模型路由由 DSH 官方 pi-ai 适配器按用户设置文档注册。在 `$DSH_HOME/settings.yaml`（如 `~/.dsh/settings.yaml`）的 `llm-pi-ai.providers` 下添加：
-
-```yaml
-llm-pi-ai:
-  providers:
-    openai-codex: {}
-```
-
-留空即使用 pi-ai 内置 catalog 的模型（GPT-5.4 / GPT-5.4 mini / GPT-5.5 / GPT-5.6 系列等）。设置文档热重载，无需重启：路由注册后，对应 GPT 模型即出现在「设置 → 模型」与模型选择器中；凭证按请求从 `llm-pi-ai/openai-codex` 解析，不需要再走一遍独立的适配器登录。
 
 ## 安装（组合级挂载）
 
@@ -44,12 +33,12 @@ dsh plugin add dsh-openai-subscription
 
 ## 工作原理
 
-1. Host 半区（`src/host.ts`，TypeScript 源码，`tsc` 原地编译产出 `src/host.js`）是一个 cordis **类插件**（`TypertRemoteService` 子类），挂载后提供 `openaiSubscription` 服务，并以**源模式**暴露 `openaiSubscription/status | authorize | poll | cancel | logout | models` 六个 Typert Remote 端点——网关直接从 `@Remote` 标记发现，无需生成 typert 工件
+1. Host 半区（`src/host.ts`，TypeScript 源码，`tsc` 原地编译产出 `src/host.js`）是一个 cordis **类插件**（`TypertRemoteService` 子类），挂载后提供 `openaiSubscription` 服务，并以**源模式**暴露 `openaiSubscription/status | authorize | poll | cancel | logout` 五个 Typert Remote 端点——网关直接从 `@Remote` 标记发现，无需生成 typert 工件
 2. 登录时通过 `shell` 服务起 `node` 子进程，动态导入 DSH 内置的 `@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js`，复用其 `openaiCodexOAuth`（Codex CLI 公开 client + `auth.openai.com` 设备码端点）
 3. 用户打开 `auth.openai.com/codex/device` 用订阅账号登录并输入验证码；插件轮询 `deviceauth/token`，用返回的 authorization code 在 `oauth/token` 交换 access/refresh token
-4. 授权/刷新成功时把同一条 grant 按 pi-ai 的凭证形状（`type: oauth` + access/refresh/expires/accountId）镜像写入 `llm-pi-ai/openai-codex`——这是 DSH 官方 `dsh-llm-pi-ai` 适配器为 `openai-codex` 路由解析凭证的记录地址，因此登录一次即可让 GPT 模型按请求取到凭证；退出登录时两份记录一起删除
-5. `openaiSubscription/models` 端点返回模型可用列表：`openai-codex` 路由已注册时列出 `llm` 服务的实时模型，否则回退为已安装 pi-ai 的 catalog 预览，并附带 `configured`（路由是否注册）与 `synced`（镜像凭证是否存在）
-6. Client 半区（`src/client.ts`，`dsh.client` 双面包，原地编译为 `src/client.js`）在设置页全程展示状态与模型列表，通过 `connection.rpc.call('/api', 'openaiSubscription/*', { args }, signal)` 调用宿主
+4. 授权/刷新成功时把同一条 grant 按 pi-ai 的凭证形状（`type: oauth` + access/refresh/expires/accountId）镜像写入 `llm-pi-ai/openai-codex`——这是 DSH 官方 `dsh-llm-pi-ai` 适配器为 `openai-codex` 路由解析凭证的记录地址；同时通过 `settings.mutate` 以路径写入方式静默添加 `llm-pi-ai.providers.openai-codex`（设置文档热重载，适配器随即注册路由），已存在的 provider 配置与用户自定义的 `openai-codex` profile 一律不动
+5. 退出登录时删除两份凭证记录，并在「本插件添加的默认空路由」前提下撤回 `openai-codex`（`settings.mutate` 的 `unset`），模型列表随之消失
+6. Client 半区（`src/client.ts`，`dsh.client` 双面包，原地编译为 `src/client.js`）在设置页全程展示登录状态，通过 `connection.rpc.call('/api', 'openaiSubscription/*', { args }, signal)` 调用宿主
 
 ## 凭证与安全
 
@@ -90,7 +79,7 @@ bun run typecheck  # 仅类型检查，不产出
 
 - **编译产物随源码一起提交**（`src/*.js` / `src/*.d.ts` 入库），不依赖任何 npm 生命周期钩子：`bun` / `pnpm` 默认拦截依赖安装脚本、`npm i --ignore-scripts`、离线 git 安装等场景全部可用。修改 `src/*.ts` 后先 `bun run build` 再把产物与源码一起提交；发布前同样先构建
 - 工具链为 **TypeScript 7**（原生编译器，`typescript@^7.0.2`）；本仓库代码同时通过 tsc 5.9 验证，产物逐字节一致
-- Host 半区类型直接来自 DSH 各接缝包自带的 `.d.ts`（`dsh-credentials` / `dsh-shell` / `dsh-authorization` / `dsh-llm` / `cordis-plugin-timer` / `dsh-typert-protocol`），全部为 devDependencies，不引入运行时依赖
+- Host 半区类型直接来自 DSH 各接缝包自带的 `.d.ts`（`dsh-credentials` / `dsh-shell` / `dsh-authorization` / `dsh-settings` / `cordis-plugin-timer` / `dsh-typert-protocol`），全部为 devDependencies，不引入运行时依赖
 
 ## 环境要求
 
