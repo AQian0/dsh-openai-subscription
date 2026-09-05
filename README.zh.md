@@ -22,12 +22,6 @@
 - [包含 Codex 权限的 ChatGPT 套餐](https://help.openai.com/en/articles/11369540-use-codex-with-a-chatgpt-plan)，并已启用设备码授权
 - 能够访问 `auth.openai.com` 和 `chatgpt.com`
 
-如需安装或更新 DSH：
-
-```sh
-npm install -g pnpm @deepseek-ai/dsh@next
-```
-
 ## 安装
 
 将插件安装到 Web profile：
@@ -80,7 +74,7 @@ dsh plugin --profile web remove dsh-openai-subscription
 ## 故障排查
 
 - **设置中没有入口：** 使用 `dsh plugin --profile web why dsh-openai-subscription` 确认插件已安装到 `web` profile，然后重启 DSH 并刷新页面。
-- **无法开始授权：** 更新 DSH，确认 `node --version` 满足要求，并检查 OpenAI 登录服务是否可访问。
+- **无法开始授权：** 确认 `node --version` 满足要求，并检查 OpenAI 登录服务是否可访问。
 - **设备码被拒绝：** 在 ChatGPT 安全设置中启用设备码授权，然后重新连接。
 - **模型需要同步：** 点击 **同步模型**。若已有显式模型列表，请阅读确认提示后继续；插件会保留本地编辑。
 - **模型同步失败：** 现有设置会保持不变。检查 `chatgpt.com` 的网络访问和授权状态，稍后重试；必要时先刷新授权。
@@ -88,7 +82,7 @@ dsh plugin --profile web remove dsh-openai-subscription
 
 ## 兼容性说明
 
-动态目录使用 ChatGPT 官方 Codex 客户端所使用的后端接口，但它不是公开、稳定承诺的 OpenAI API，未来可能变化。接口不提供完整的输出上限、费用或 wire compatibility 元数据；已知模型由 `llm-pi-ai` 补全，未知模型使用适配器默认值。目录中出现模型也不保证旧版适配器支持其所有新能力，遇到调用兼容问题时请先更新 DSH。
+动态目录使用 ChatGPT 官方 Codex 客户端所使用的后端接口，但它不是公开、稳定承诺的 OpenAI API，未来可能变化。接口不提供完整的输出上限、费用或 wire compatibility 元数据；已知模型由 `llm-pi-ai` 补全，未知模型使用适配器默认值。目录中出现模型也不保证当前安装的适配器支持其所有新能力。
 
 ## 安全与隐私
 

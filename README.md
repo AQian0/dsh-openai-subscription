@@ -22,12 +22,6 @@ Use a ChatGPT subscription with Codex access in [DeepSeek Harness](https://githu
 - A [ChatGPT plan with Codex access](https://help.openai.com/en/articles/11369540-use-codex-with-a-chatgpt-plan) and device-code authorization enabled
 - Network access to `auth.openai.com` and `chatgpt.com`
 
-Install or update DSH when needed:
-
-```sh
-npm install -g pnpm @deepseek-ai/dsh@next
-```
-
 ## Installation
 
 Install the plugin into the Web profile:
@@ -80,7 +74,7 @@ Restart the Web profile and refresh the page afterward.
 ## Troubleshooting
 
 - **The settings entry is missing:** confirm the plugin is installed in the `web` profile with `dsh plugin --profile web why dsh-openai-subscription`, then restart DSH and refresh the page.
-- **Authorization cannot start:** update DSH, confirm `node --version` meets the requirement, and check access to the OpenAI authentication service.
+- **Authorization cannot start:** confirm `node --version` meets the requirement and check access to the OpenAI authentication service.
 - **The device code is rejected:** enable device-code authorization in ChatGPT security settings and start a new connection.
 - **Models need syncing:** select **Sync models**. If an explicit list already exists, review the confirmation and continue; local edits are preserved.
 - **Model sync fails:** existing settings remain unchanged. Check access to `chatgpt.com` and authorization status, then retry; refresh authorization first if needed.
@@ -88,7 +82,7 @@ Restart the Web profile and refresh the page afterward.
 
 ## Compatibility notes
 
-Dynamic discovery uses the backend endpoint used by the official ChatGPT Codex client, but that endpoint is not a public, stability-guaranteed OpenAI API and may change. It does not provide complete output-limit, cost, or wire-compatibility metadata. `llm-pi-ai` fills metadata for known models; unknown models use adapter defaults. Catalog presence also does not guarantee that an older adapter supports every new model capability, so update DSH first when calls reveal compatibility problems.
+Dynamic discovery uses the backend endpoint used by the official ChatGPT Codex client, but that endpoint is not a public, stability-guaranteed OpenAI API and may change. It does not provide complete output-limit, cost, or wire-compatibility metadata. `llm-pi-ai` fills metadata for known models; unknown models use adapter defaults. Catalog presence also does not guarantee that the installed adapter supports every new model capability.
 
 ## Security and privacy
 
