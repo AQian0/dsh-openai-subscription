@@ -18,21 +18,20 @@ concurrency:
 
 jobs:
   check:
-    name: Node.js ${{ matrix.node-version }}
+    name: ${{ matrix.package-manager }} / Node.js ${{ matrix.node-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
+        package-manager:
+          - npm
+          - pnpm
         node-version:
           - "22.19.0"
           - "24"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.0
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -40,11 +39,21 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
+      - name: Enable pnpm
+        if: matrix.package-manager == 'pnpm'
+        run: corepack enable && corepack prepare pnpm@10.6.3 --activate
+
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        shell: bash
+        run: |
+          if [[ "${{ matrix.package-manager }}" == "npm" ]]; then
+            npm install --ignore-scripts --no-package-lock
+          else
+            pnpm install --frozen-lockfile
+          fi
 
       - name: Typecheck, build, and test
-        run: bun run check
+        run: ${{ matrix.package-manager }} run check
 
       - name: Preview package contents
-        run: bun pm pack --dry-run --ignore-scripts
+        run: npm pack --dry-run --ignore-scripts

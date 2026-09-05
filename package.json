@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "ChatGPT subscription sign-in for DeepSeek Harness via OpenAI device authorization.",
   "type": "module",
-  "packageManager": "bun@1.4.0",
+  "packageManager": "pnpm@10.6.3",
   "engines": {
     "node": ">=22.19.0"
   },
@@ -24,11 +24,12 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "clean": "node --eval \"for (const path of ['dist', '.test-dist']) require('node:fs').rmSync(path, { recursive: true, force: true })\"",
+    "build": "node --eval \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "test": "rm -rf .test-dist && tsc -p tsconfig.test.json && node --test .test-dist/tests/*.test.js && rm -rf .test-dist",
-    "check": "bun run typecheck && bun run build && bun run test",
-    "prepack": "bun run check"
+    "test": "node --eval \"require('node:fs').rmSync('.test-dist', { recursive: true, force: true })\" && tsc -p tsconfig.test.json && node --test .test-dist/tests/*.test.js && node --eval \"require('node:fs').rmSync('.test-dist', { recursive: true, force: true })\"",
+    "check": "node scripts/run-scripts.mjs typecheck build test",
+    "prepack": "node scripts/run-scripts.mjs check"
   },
   "files": [
     "dist",
