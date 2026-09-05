@@ -50,7 +50,8 @@ class FakeDocument {
   activeElement: FakeNode | null = null
   listeners = new Map<string, Set<(event: never) => void>>()
   styleAdded = false
-  head = { appendChild: () => { this.styleAdded = true } }
+  styles: FakeNode[] = []
+  head = { appendChild: (node: FakeNode) => { this.styleAdded = true; this.styles.push(node) } }
   querySelector(): null { return null }
   createElement(tag: string): FakeNode { return new FakeNode(tag, this) }
   addEventListener(name: string, callback: (event: never) => void): void {
@@ -214,6 +215,8 @@ class Harness {
       if (Array.isArray(value)) return value.flatMap((child, i) => visit(child, path + '.' + i))
       if (value === null || typeof value !== 'object') return []
       const element = value as ElementNode
+      // Nested presentational components (e.g. the shared brand SVG) have no hooks.
+      if (typeof element.type === 'function') return visit(element.type(element.props), path + '.component')
       assert.equal(typeof element.type, 'string')
       const old = previousNodes.get(path)
       const node = old?.tag === element.type ? old : new FakeNode(element.type as string, this.document)
@@ -266,7 +269,9 @@ class Harness {
     if (value === null || value === undefined || typeof value === 'boolean') return ''
     if (Array.isArray(value)) return value.map((child) => this.text(child)).join(' ')
     if (typeof value !== 'object') return String(value)
-    return (value as ElementNode).children.map((child) => this.text(child)).join(' ')
+    const element = value as ElementNode
+    if (typeof element.type === 'function') return this.text(element.type(element.props))
+    return element.children.map((child) => this.text(child)).join(' ')
   }
   all(tag: string): FakeNode[] { return [...this.nodes.values()].filter((node) => node.tag === tag) }
   button(label: string): FakeNode {
@@ -313,6 +318,71 @@ test('global loader registers settings and complete matching English/Chinese dic
     }
     assert.equal(h.calls.filter((call) => call.method === 'poll').length, 0)
   } finally { h.dispose() }
+})
+
+test('header and navigation share a theme-aware OpenAI SVG without changing text labels', async () => {
+  for (const language of ['en', 'zh']) {
+    const h = await mount({ language })
+    try {
+      assert.equal((h.meta.label as () => string)(), h.translate('nav'))
+      assert.equal(typeof h.meta.icon, 'function')
+      const nav = (h.meta.icon as (props: Props) => ElementNode)({ size: 16, className: 'host-nav-icon' })
+      assert.equal(nav.type, 'svg')
+      assert.equal(nav.props.width, 16)
+      assert.equal(nav.props.height, 16)
+      assert.equal(nav.props.className, 'host-nav-icon')
+      const [header] = h.all('svg')
+      assert.ok(header)
+      assert.equal(header.props.width, 24)
+      assert.equal(header.props.height, 24)
+      for (const props of [nav.props, header.props]) {
+        assert.equal(props.viewBox, '0 0 24 24')
+        assert.equal(props.fill, 'currentColor')
+        assert.equal(props.fillRule, 'evenodd')
+        assert.equal(props['aria-hidden'], true)
+        assert.equal(props.focusable, false)
+      }
+      assert.equal((nav.children[0] as ElementNode).props.d, header.children[0]?.props.d)
+      assert.equal(h.all('img').length, 0, 'Brand icon must not load an external image')
+      assert.equal(h.text().includes('✦'), false)
+    } finally { h.dispose() }
+  }
+})
+
+test('outlined controls use visible full-pixel theme-aware borders without overriding filled hover colors', async () => {
+  const h = await mount()
+  try {
+    const css = h.document.styles.map((style) => style.textContent).join('\n')
+    const button = css.match(/\.oasub-button \{([^}]+)\}/)?.[1] ?? ''
+    assert.match(button, /border: 1px solid var\(--oasub-control-border\)/)
+    assert.match(css, /--oasub-control-border: color-mix\(in srgb, var\(--dsw-alias-label-primary, #0f1115\) 48%, transparent\)/)
+    assert.match(css, /\.oasub-button:not\(\.primary\):not\(\.danger\):hover:not\(:disabled\)/)
+    assert.doesNotMatch(css, /\.oasub-button:hover:not\(:disabled\) \{[^}]*background:/)
+    assert.match(css, /\.oasub-button:focus-visible \{ outline: 2px solid/)
+    assert.match(css, /@media \(forced-colors: active\)/)
+    assert.match(css, /\.oasub-button:disabled \{ border-color: GrayText; color: GrayText; opacity: 1; \}/)
+  } finally { h.dispose() }
+})
+
+test('header and reload footer stay flush with the card frame while only card content is inset', async () => {
+  for (const status of [connected, disconnected]) {
+    const h = await mount({ configure: (h) => { h.status = { ...status } } })
+    try {
+      const css = h.document.styles.map((style) => style.textContent).join('\n')
+      assert.match(css, /--oasub-section-inset: 20px;/)
+      assert.match(css, /--oasub-card-border-width: 1px;/)
+      assert.match(css, /\.oasub-heading \{ min-width: 0; overflow-wrap: anywhere; \}/)
+      assert.match(css, /\.oasub-header, \.oasub-footer \{ padding-inline: 0; \}/)
+      assert.doesNotMatch(css, /\.oasub-header, \.oasub-footer \{[^}]*--oasub-section-inset/)
+      const card = css.match(/\.oasub-card \{([^}]+)\}/)?.[1] ?? ''
+      assert.match(card, /padding: var\(--oasub-section-inset\);/)
+      assert.match(card, /border: var\(--oasub-card-border-width\) solid/)
+      assert.match(css, /@media \(max-width: 520px\) \{\s*\.oasub-wrap \{ --oasub-section-inset: 16px; \}/)
+      const footers = h.all('div').filter((node) => node.props.className === 'oasub-actions oasub-footer')
+      assert.equal(footers.length, 1, 'Identify the standalone reload row separately from card/dialog actions')
+      assert.equal(footers[0]?.children[0], h.button('Reload status'))
+    } finally { h.dispose() }
+  }
 })
 
 test('action error persists after automatic, manual, and connection-reset status reloads', async () => {

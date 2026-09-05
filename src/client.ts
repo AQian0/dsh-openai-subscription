@@ -79,6 +79,8 @@ interface SettingsSectionMeta {
   id: string
   order: number
   label: string | (() => string)
+  // Optional DSH list-slot icon seat; older hosts retain their default nav glyph.
+  icon?: IconComponent
   locale?: string
 }
 
@@ -124,9 +126,11 @@ interface SectionProps {
 }
 
 type SectionComponent = (props: SectionProps) => ReactElement
+interface IconProps { size?: number; className?: string }
+type IconComponent = (props: IconProps) => ReactElement
 
 interface ReactModule {
-  createElement(type: string | SectionComponent, props: Record<string, unknown> | null, ...children: ReactNode[]): ReactElement
+  createElement(type: string | SectionComponent | IconComponent, props: Record<string, unknown> | null, ...children: ReactNode[]): ReactElement
   useState<S>(initial: S): [S, (update: S | ((previous: S) => S)) => void]
   useEffect(effect: () => void | (() => void), deps?: ReadonlyArray<unknown>): void
   useRef<T>(initial: T): { current: T }
@@ -360,8 +364,27 @@ window.__ModuleLoader__.load({
 
     const React = require('react') as ReactModule
 
+    // Lobe Icons @lobehub/icons-static-svg 1.95.0, icons/openai.svg (MIT).
+    // Geometry is unchanged; see THIRD_PARTY_NOTICES.md for attribution.
+    // One local SVG component serves both the host navigation and this header:
+    // no extra React runtime, icon-library bundle, or external image request.
+    function OpenAIIcon({ size = 24, className }: IconProps): ReactElement {
+      return React.createElement('svg', {
+        xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 24 24',
+        width: size, height: size, fill: 'currentColor', fillRule: 'evenodd',
+        className, 'aria-hidden': true, focusable: false,
+      }, React.createElement('path', {
+        d: 'M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z',
+      }))
+    }
+
     const CSS = `
 .oasub-wrap {
+  --oasub-section-inset: 20px;
+  --oasub-card-border-width: 1px;
+  /* Control boundaries need more contrast than the host's decorative hairlines. */
+  --oasub-control-border: color-mix(in srgb, var(--dsw-alias-label-primary, #0f1115) 48%, transparent);
+  --oasub-control-border-hover: color-mix(in srgb, var(--dsw-alias-label-primary, #0f1115) 68%, transparent);
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -370,6 +393,8 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-primary, #0f1115);
 }
 .oasub-wrap, .oasub-wrap * { box-sizing: border-box; }
+/* Align the header icon and footer button with the card's outer frame. Only the card is inset. */
+.oasub-header, .oasub-footer { padding-inline: 0; }
 .oasub-header { display: flex; align-items: center; gap: 12px; }
 .oasub-mark {
   display: grid;
@@ -380,19 +405,17 @@ window.__ModuleLoader__.load({
   border-radius: 13px;
   color: var(--dsw-alias-label-primary-inverted, #fff);
   background: var(--dsw-alias-brand-primary, #4176e6);
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1;
 }
-.oasub-heading { min-width: 0; }
+.oasub-mark > svg { display: block; flex: none; }
+.oasub-heading { min-width: 0; overflow-wrap: anywhere; }
 .oasub-title { margin: 0; font-size: 18px; font-weight: 600; line-height: 26px; }
 .oasub-subtitle { margin: 2px 0 0; color: var(--dsw-alias-label-tertiary, #81858c); font-size: 13px; line-height: 20px; }
 .oasub-card {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 20px;
-  border: .5px solid var(--dsw-alias-border-l2, rgba(15, 17, 21, .14));
+  padding: var(--oasub-section-inset);
+  border: var(--oasub-card-border-width) solid var(--dsw-alias-border-l2, rgba(15, 17, 21, .14));
   border-radius: 16px;
   background: var(--dsw-alias-bg-layer-1, #fff);
   box-shadow: var(--dsw-shadow-lv1, 0 2px 8px rgba(0, 0, 0, .04));
@@ -431,7 +454,7 @@ window.__ModuleLoader__.load({
   appearance: none;
   min-height: 36px;
   padding: 7px 15px;
-  border: .5px solid var(--dsw-alias-border-l1, rgba(15, 17, 21, .2));
+  border: 1px solid var(--oasub-control-border);
   border-radius: 999px;
   color: var(--dsw-alias-label-primary, #0f1115);
   background: transparent;
@@ -444,7 +467,7 @@ window.__ModuleLoader__.load({
   text-align: center;
   transition: background .16s ease, border-color .16s ease, opacity .16s ease, transform .16s ease;
 }
-.oasub-button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(15, 17, 21, .06)); }
+.oasub-button:not(.primary):not(.danger):hover:not(:disabled) { border-color: var(--oasub-control-border-hover); background: var(--dsw-alias-interactive-bg-hover, rgba(15, 17, 21, .06)); }
 .oasub-button:active:not(:disabled) { transform: translateY(1px); }
 .oasub-button:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #4176e6); outline-offset: 2px; }
 .oasub-button:disabled { cursor: default; opacity: .45; }
@@ -495,10 +518,18 @@ window.__ModuleLoader__.load({
 .oasub-dialog p { margin: 8px 0 18px; color: var(--dsw-alias-label-secondary, #61666b); font-size: 13px; line-height: 20px; }
 .oasub-dialog .oasub-actions { justify-content: flex-end; }
 @media (max-width: 520px) {
-  .oasub-card { padding: 16px; }
+  .oasub-wrap { --oasub-section-inset: 16px; }
   .oasub-status-line { flex-direction: column; }
   .oasub-button { flex: 1 1 auto; }
   .oasub-button.quiet { margin-left: 0; }
+}
+@media (forced-colors: active) {
+  .oasub-button { border-color: ButtonText; }
+  .oasub-button.primary, .oasub-button.danger { border-color: ButtonText; color: ButtonText; background: ButtonFace; }
+  .oasub-button:not(.primary):not(.danger):hover:not(:disabled),
+  .oasub-button.primary:hover:not(:disabled), .oasub-button.danger:hover:not(:disabled) { border-color: Highlight; filter: none; }
+  .oasub-button:focus-visible { outline-color: Highlight; }
+  .oasub-button:disabled { border-color: GrayText; color: GrayText; opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
   .oasub-button { transition: none; }
@@ -1146,7 +1177,7 @@ window.__ModuleLoader__.load({
 
       return el('div', { className: 'oasub-wrap' },
         el('header', { className: 'oasub-header' },
-          el('div', { className: 'oasub-mark', 'aria-hidden': true }, '✦'),
+          el('div', { className: 'oasub-mark', 'aria-hidden': true }, el(OpenAIIcon, { size: 24 })),
           el('div', { className: 'oasub-heading' },
             el('h2', { className: 'oasub-title' }, t('title')),
             el('p', { className: 'oasub-subtitle' }, t('subtitle')),
@@ -1158,7 +1189,7 @@ window.__ModuleLoader__.load({
               t(statusError), info !== null ? ' ' + t('status.stale') : null,
               el('button', { type: 'button', className: 'oasub-button quiet', disabled: statusLoading, onClick: reloadStatus }, t('action.retry')),
             ) : null,
-        el('div', { className: 'oasub-actions' },
+        el('div', { className: 'oasub-actions oasub-footer' },
           el('button', { ref: reloadRef, type: 'button', className: 'oasub-button', disabled: statusLoading, onClick: reloadStatus },
             t(statusLoading ? 'status.reloading' : 'action.reload')),
         ),
@@ -1246,6 +1277,7 @@ window.__ModuleLoader__.load({
           id: 'openai-subscription',
           order: 25,
           label: () => t('nav'),
+          icon: OpenAIIcon,
           locale: NS,
         },
         () => React.createElement(Section, { connection: ctx.connection, timer: ctx.timer, t, subscribeReset }),

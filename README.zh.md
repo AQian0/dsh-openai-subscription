@@ -120,6 +120,12 @@ dsh plugin --profile web remove dsh-openai-subscription
 
 安装依赖后运行 `npm run check`（或 `pnpm run check`），完成类型检查、构建和回归测试；`npm pack --dry-run --ignore-scripts` 检查发布文件。测试使用模拟 OAuth、网络与凭证服务，不访问真实账号。修改插件后需要重新构建并重新安装/加载该版本，再重启 `dsh web`、刷新现有页面；仅修改源码不会更新已安装的 GUI 插件。
 
+### 设置界面与导航图标
+
+按钮使用主题自适应的 `1px` 高对比度边框。顶部和导航复用本地 OpenAI SVG，无额外运行时依赖或远程图片请求；来源及许可证见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+
+当前官方 DSH 设置导航尚未提供自定义图标接口，未扩展的宿主仍显示默认齿轮，插件其他功能不受影响。本项目提供**显式执行、限定构建版本、可还原**的本机 DSH 扩展，不在安装时自动修改宿主。它保留字符串标签，通过 `icon({ size, className })` 传递图标，不使用 DOM/CSS 替换技巧。用法和升级注意事项见 [DSH 图标接口扩展](docs/DSH_SETTINGS_ICONS.md)。
+
 ## 许可证
 
 MIT——见 [LICENSE](LICENSE)。

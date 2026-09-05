@@ -36,6 +36,9 @@
     "cordis.patch.yml",
     "README.md",
     "README.zh.md",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/DSH_SETTINGS_ICONS.md",
+    "scripts/patch-dsh-settings-icons.mjs",
     "LICENSE"
   ],
   "keywords": [
