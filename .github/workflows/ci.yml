@@ -18,12 +18,16 @@ concurrency:
 
 jobs:
   check:
-    name: ${{ matrix.package-manager }} / Node.js ${{ matrix.node-version }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / ${{ matrix.package-manager }} / Node.js ${{ matrix.node-version }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
         package-manager:
           - npm
           - pnpm
