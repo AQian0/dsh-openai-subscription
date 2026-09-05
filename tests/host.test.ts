@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
-import { join, resolve } from 'node:path'
+import { posix } from 'node:path'
 import test from 'node:test'
 
-import OpenAISubscriptionController, { authModuleCandidates } from '../src/host.js'
+import OpenAISubscriptionController, { authModuleCandidates as platformCandidates } from '../src/host.js'
+import { SubscriptionError } from '../src/errors.js'
+const { join, resolve } = posix
+const authModuleCandidates = (entry: string | undefined, binary: string | undefined, env: NodeJS.ProcessEnv) => platformCandidates(entry, binary, env, 'linux')
 import type { DiscoveredModelCatalog } from '../src/models.js'
 
 const MAIN_KEY = 'dsh-openai-subscription/chatgpt'
@@ -32,6 +35,13 @@ interface ControllerHarness {
     task: Promise<void> | null
   } | null
   status: OpenAISubscriptionController['status']
+  authorize: OpenAISubscriptionController['authorize']
+  poll: OpenAISubscriptionController['poll']
+  cancel: OpenAISubscriptionController['cancel']
+  runDevice(
+    control: { signal: AbortSignal; aborted(): boolean },
+    notify: (notice: { kind?: string; message: string; code?: string; url?: string }) => void,
+  ): Promise<unknown>
   runRefresh(
     control: { signal: AbortSignal; aborted(): boolean },
     notify: (notice: { kind?: string; message?: string }) => void,
@@ -43,7 +53,8 @@ interface ControllerHarness {
 
 function controllerWith(services: Record<string, unknown>): ControllerHarness {
   const controller = Object.create(OpenAISubscriptionController.prototype) as ControllerHarness
-  controller.ctx = { get: (name) => services[name] }
+  const defaults = { shell: { resolve: (spec: unknown) => spec } }
+  controller.ctx = { get: (name) => ({ ...defaults, ...services })[name] }
   controller.registeredAuthorization = null
   controller.cachedModule = '/trusted/openai-codex.js'
   controller.locatingModule = null
@@ -81,6 +92,9 @@ test('status returns semantic connection and model-sync facts without account me
   assert.deepEqual(status, {
     configured: true,
     ready: true,
+    flowPending: false,
+    cleanupAvailable: true,
+    credentialState: 'valid',
     refreshable: true,
     modelsSynced: true,
     modelCount: 1,
@@ -98,7 +112,7 @@ test('status does not claim an adapter credential that this plugin does not own'
     },
   })
 
-  assert.deepEqual(await controller.status(), { configured: false, ready: true })
+  assert.deepEqual(await controller.status(), { configured: false, ready: true, cleanupAvailable: false, flowPending: false })
 })
 
 test('syncModels adopts live models while preserving local model entries and edits', async () => {
@@ -267,7 +281,7 @@ test('automatic sync does not reinterpret a pre-existing user or base allow-list
     })
     controller.modelDiscovery = async () => ({ models: [{ id: 'remote' }], seenIds: ['remote'] })
 
-    await assert.rejects(controller.synchronizeModels(), /确认同步/)
+    await assert.rejects(controller.synchronizeModels(), /models-confirmation-required/)
     assert.equal(mutated, false)
   }
 })
@@ -339,7 +353,7 @@ test('logout fails when the provider credential cannot be deleted', async () => 
     },
   })
 
-  await assert.rejects(controller.logout(), /locked/)
+  await assert.rejects(controller.logout(), /credential-write-failed/)
   assert.deepEqual(calls, [ADAPTER_KEY])
 })
 
@@ -361,7 +375,7 @@ test('logout strips the duplicate token before a provider deletion that may fail
     },
   })
 
-  await assert.rejects(controller.logout(), /locked/)
+  await assert.rejects(controller.logout(), /credential-write-failed/)
   assert.deepEqual(records[MAIN_KEY], {
     kind: 'grant',
     payload: { provider: 'openai', cleanupPending: true },
@@ -442,7 +456,7 @@ test('logout preserves credentials when settings cleanup keeps conflicting', asy
     },
   })
 
-  await assert.rejects(controller.logout(), /尚未断开连接/)
+  await assert.rejects(controller.logout(), /settings-conflict/)
   assert.deepEqual(calls, [])
 })
 
@@ -602,24 +616,16 @@ test('locateAuthModule prefers and caches the in-process probe without a shell',
     '/probed/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js')
 })
 
-test('locateAuthModule falls back to the shell locator when the probe misses', async () => {
-  const commands: string[] = []
+test('locateAuthModule retries missing components without launching platform shell commands', async () => {
   const controller = controllerWith({
-    shell: {
-      resolve: (spec: { command: string }) => spec,
-      run: async (spec: { command: string }) => {
-        commands.push(spec.command)
-        return { exitCode: 0, aborted: false, stdout: { text: '/from/pi-cli/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js\n' } }
-      },
-    },
+    shell: { run: () => { throw new Error('must not launch locator') } },
   })
   controller.cachedModule = null
-  controller.probeInProcessModule = () => ''
-
-  assert.equal(await controller.locateAuthModule(),
-    '/from/pi-cli/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js')
-  assert.equal(commands.length, 1)
-  assert.ok(commands[0]?.includes('command -v pi'))
+  let probes = 0
+  controller.probeInProcessModule = () => ++probes === 1 ? '' : '/newly-mounted/auth.js'
+  assert.equal(await controller.locateAuthModule(), '')
+  assert.equal(await controller.locateAuthModule(), '/newly-mounted/auth.js')
+  assert.equal(probes, 2)
 })
 
 test('locateAuthModule returns empty when no probe and no shell service exist', async () => {
@@ -629,4 +635,187 @@ test('locateAuthModule returns empty when no probe and no shell service exist', 
 
   assert.equal(await controller.locateAuthModule(), '')
   assert.equal(controller.cachedModule, null)
+})
+
+test('status checks services, expiry, partial cleanup and redacts provider metadata', async () => {
+  const records: Record<string, StoredRecord | undefined> = {
+    [MAIN_KEY]: { kind: 'grant', payload: { access: 'private', refresh: 'private-refresh' } },
+    [ADAPTER_KEY]: { kind: 'grant', payload: { access: 'provider-private', expires: 1, accountId: 'private-id' } },
+  }
+  const controller = controllerWith({
+    shell: undefined,
+    credentials: { readRecord: async (key: string) => records[key] },
+  })
+  const status = await controller.status()
+  assert.equal(status.ready, false)
+  assert.equal(status.unavailableReason, 'shell-unavailable')
+  assert.equal(status.credentialState, 'expired')
+  assert.equal(status.cleanupAvailable, true)
+  assert.doesNotMatch(JSON.stringify(status), /private|accountId|expires/)
+  records[ADAPTER_KEY] = undefined
+  const partial = await controller.status()
+  assert.equal(partial.configured, false)
+  assert.equal(partial.cleanupAvailable, true)
+  const noCredentials = await controllerWith({ credentials: undefined }).status()
+  assert.equal(noCredentials.ready, false)
+  assert.equal(noCredentials.unavailableReason, 'credentials-unavailable')
+})
+
+test('public RPC errors never leak credential-store messages', async () => {
+  const controller = controllerWith({
+    credentials: { readRecord: async () => { throw new Error('Bearer secret-token accountId=private') } },
+  })
+  await assert.rejects(controller.status(), { message: '[openai-subscription:credentials-unavailable]' })
+  await assert.rejects(controller.logout(), { message: '[openai-subscription:credential-write-failed]' })
+})
+
+test('authorization errors keep stable codes and clear completed device secrets', async () => {
+  const controller = controllerWith({})
+  controller.runDevice = async (_control, notify) => {
+    notify({ kind: 'enter-code', message: 'code ready', code: 'ABCD-1234', url: 'https://auth.openai.com/codex/device' })
+    throw new SubscriptionError('device-auth-disabled')
+  }
+  assert.deepEqual(await controller.authorize('device_code'), { started: true })
+  await controller.pendingBridge?.task
+  const first = await controller.poll()
+  assert.equal(first.status, 'done')
+  if (first.status !== 'done') assert.fail('flow must finish')
+  assert.equal(first.errorCode, 'device-auth-disabled')
+  assert.doesNotMatch(JSON.stringify(first), /ABCD-1234/)
+  assert.deepEqual(await controller.poll(), first)
+  assert.equal((await controller.authorize('unexpected')).started, false)
+  assert.equal((await controller.authorize({})).started, false)
+})
+
+test('pending flow snapshots survive polling and reject racing authorizations or sync', async () => {
+  const controller = controllerWith({})
+  let finish!: () => void
+  controller.runDevice = async (_control, notify) => {
+    notify({ kind: 'enter-code', message: 'code ready', code: 'ABCD-1234' })
+    await new Promise<void>((resolve) => { finish = resolve })
+    return { access: 'private' }
+  }
+  await controller.authorize('device_code')
+  const first = await controller.poll()
+  assert.equal(first.status, 'pending')
+  assert.equal((await controller.status()).flowPending, true)
+  assert.deepEqual(await controller.poll(), first)
+  assert.deepEqual(await controller.authorize('refresh'), { started: false, errorCode: 'busy', error: '[openai-subscription:busy]' })
+  await assert.rejects(controller.syncModels(), /busy/)
+  await controller.cancel()
+  assert.equal(controller.pendingBridge?.controller.signal.aborted, true)
+  finish()
+  await controller.pendingBridge?.task
+})
+
+test('disconnect blocks new authorization until storage deletion settles', async () => {
+  let finish!: () => void
+  const controller = controllerWith({
+    credentials: {
+      readRecord: async () => ({ kind: 'grant', payload: {} }),
+      deleteRecord: async (key: string) => { if (key === ADAPTER_KEY) await new Promise<void>((resolve) => { finish = resolve }) },
+    },
+  })
+  const pending = controller.logout()
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+  assert.equal((await controller.authorize('device_code')).started, false)
+  await assert.rejects(controller.syncModels(), /busy/)
+  finish()
+  assert.deepEqual(await pending, { ok: true })
+})
+
+test('explicit model adoption requires confirmed=true and reports partial metadata writes', async () => {
+  let mutated = false
+  const controller = controllerWith({
+    credentials: {
+      readRecord: async (key: string) => ({ kind: 'grant', payload: key === MAIN_KEY ? {} : { access: 'private' } }),
+      modifyRecord: async () => { throw new Error('secret storage failure') },
+    },
+    settings: {
+      describe: () => [{ ns: 'llm-pi-ai', user: { providers: { 'openai-codex': { models: [{ id: 'custom' }] } } }, value: {} }],
+      mutate: async () => { mutated = true },
+    },
+    llm: { discoverModels: async () => [] },
+  })
+  controller.modelDiscovery = async () => ({ models: [{ id: 'remote' }], seenIds: ['remote'] })
+  await assert.rejects(controller.syncModels(), /models-confirmation-required/)
+  assert.equal(mutated, false)
+  assert.deepEqual(await controller.syncModels(true), { synced: true, count: 2, warningCode: 'ownership-save-failed' })
+  assert.equal(mutated, true)
+})
+
+test('cleanup markers never claim a new provider credential or allow refresh and sync', async () => {
+  let spawned = false
+  const controller = controllerWith({
+    credentials: { readRecord: async (key: string) => ({ kind: 'grant', payload: key === MAIN_KEY ? { cleanupPending: true } : { access: 'other', refresh: 'other' } }) },
+    settings: { mutate() {} },
+    shell: { run: () => { spawned = true } },
+  })
+  const status = await controller.status()
+  assert.equal(status.configured, false)
+  assert.equal(status.cleanupAvailable, true)
+  const abort = new AbortController()
+  await assert.rejects(controller.runRefresh({ signal: abort.signal, aborted: () => false }, () => {}), /not-connected/)
+  await assert.rejects(controller.syncModels(), /not-connected/)
+  assert.equal(spawned, false)
+})
+
+test('refresh never recreates a concurrently deleted plugin ownership record', async () => {
+  const records: Record<string, StoredRecord | undefined> = {
+    [MAIN_KEY]: { kind: 'grant', payload: {} },
+    [ADAPTER_KEY]: { kind: 'grant', payload: { access: 'old', refresh: 'old-refresh' } },
+  }
+  const controller = controllerWith({
+    credentials: {
+      readRecord: async (key: string) => records[key],
+      modifyRecord: async (key: string, modify: (current: StoredRecord | undefined) => Promise<StoredRecord | undefined>) => { records[key] = await modify(records[key]) },
+    },
+    shell: {
+      resolve: (spec: unknown) => spec,
+      run: async () => {
+        delete records[MAIN_KEY]
+        return { exitCode: 0, stdout: { text: JSON.stringify({ type: 'result', credential: { access: 'new', refresh: 'new-refresh' } }) } }
+      },
+    },
+  })
+  const abort = new AbortController()
+  await assert.rejects(controller.runRefresh({ signal: abort.signal, aborted: () => false }, () => {}), /credential-changed/)
+  assert.equal(records[MAIN_KEY], undefined)
+})
+
+test('cancel releases an uncooperative builtin catalog read before logout without settings writes', async () => {
+  const abort = new AbortController()
+  let discoveryStarted!: () => void
+  const started = new Promise<void>((resolve) => { discoveryStarted = resolve })
+  let mutated = false
+  const controller = controllerWith({
+    credentials: { readRecord: async (key: string) => ({ kind: 'grant', payload: key === MAIN_KEY ? {} : { access: 'private' } }) },
+    settings: { describe: () => [{ ns: 'llm-pi-ai', value: {} }], mutate: () => { mutated = true } },
+    llm: { discoverModels: () => { discoveryStarted(); return new Promise(() => {}) } },
+  })
+  controller.modelDiscovery = async () => ({ models: [{ id: 'remote' }], seenIds: ['remote'] })
+  const pending = controller.synchronizeModels(abort.signal)
+  await started
+  abort.abort()
+  await assert.rejects(pending, /cancelled/)
+  assert.equal(mutated, false)
+})
+
+test('refresh distinguishes timeout, sandbox denial and invalid subprocess output', async () => {
+  for (const [result, code] of [
+    [{ timedOut: true, exitCode: null }, 'timeout'],
+    [{ sandbox: { denied: true }, exitCode: 1 }, 'access-denied'],
+    [{ stdout: { text: 'null\n[]\n{}', truncated: false }, exitCode: 0 }, 'invalid-response'],
+    [{ stdout: { text: 'private', truncated: true }, exitCode: 0 }, 'invalid-response'],
+    [{ stdout: { text: JSON.stringify({ type: 'error', message: 'invalid_grant token=private' }) }, exitCode: 0 }, 'authorization-expired'],
+  ] as const) {
+    const controller = controllerWith({
+      credentials: { readRecord: async () => ({ kind: 'grant', payload: { access: 'old', refresh: 'private' } }) },
+      shell: { resolve: (spec: unknown) => spec, run: async () => ({ aborted: false, stdout: { text: '' }, ...result }) },
+    })
+    const abort = new AbortController()
+    await assert.rejects(controller.runRefresh({ signal: abort.signal, aborted: () => false }, () => {}), {
+      message: `[openai-subscription:${code}]`,
+    })
+  }
 })
