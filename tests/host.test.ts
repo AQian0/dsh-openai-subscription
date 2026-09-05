@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 
-import OpenAISubscriptionController from '../src/host.js'
+import OpenAISubscriptionController, { authModuleCandidates } from '../src/host.js'
 import type { DiscoveredModelCatalog } from '../src/models.js'
 
 const MAIN_KEY = 'dsh-openai-subscription/chatgpt'
@@ -17,6 +18,8 @@ interface ControllerHarness {
   registeredAuthorization: unknown
   cachedModule: string | null
   locatingModule: Promise<string> | null
+  probeInProcessModule(): string
+  locateAuthModule(): Promise<string>
   syncingModels: Promise<{ synced: true; count: number }> | null
   modelSyncController: AbortController | null
   modelDiscovery: (credential: { access: string; accountId?: string }) => Promise<DiscoveredModelCatalog>
@@ -515,4 +518,115 @@ test('logout removes unchanged synced rows but preserves custom models and profi
     }],
     9,
   ]])
+})
+
+test('auth module candidates find the pi-ai copy bundled inside a global DSH install', () => {
+  const candidates = authModuleCandidates(
+    '/usr/lib/node_modules/@deepseek-ai/dsh/lib/bin.js',
+    '/usr/bin/node',
+    {},
+  )
+
+  // Walking up from the running DSH entry script must reach the pi-ai copy
+  // hoisted into DSH's own node_modules, independent of any `pi` install.
+  assert.ok(candidates.includes(
+    '/usr/lib/node_modules/@deepseek-ai/dsh/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js',
+  ))
+  // Global roots derived from the Node binary cover a directly installed
+  // pi-ai as well as the DSH-bundled copy when the entry script is unusual.
+  assert.ok(candidates.includes(
+    '/usr/lib/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js',
+  ))
+})
+
+test('auth module candidates cover workspace, nvm, NODE_PATH, and bun layouts', () => {
+  const projectCandidates = authModuleCandidates(
+    '/work/app/node_modules/.bin/dsh-web-entry.js',
+    '/usr/local/bin/node',
+    {},
+  )
+  assert.ok(projectCandidates.some((candidate) => candidate === join(
+    '/work/app/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js',
+  )))
+
+  const nvmCandidates = authModuleCandidates(undefined, '/home/u/.nvm/versions/node/v22.2.0/bin/node', {})
+  assert.ok(nvmCandidates.includes(
+    '/home/u/.nvm/versions/node/v22.2.0/lib/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js',
+  ))
+  assert.ok(nvmCandidates.includes(
+    '/home/u/.nvm/versions/node/v22.2.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js',
+  ))
+
+  const pathCandidates = authModuleCandidates(undefined, '/usr/bin/node', {
+    NODE_PATH: '/opt/global-modules:/opt/other',
+    HOME: '/home/u',
+  })
+  assert.ok(pathCandidates.includes(
+    '/opt/global-modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js',
+  ))
+  assert.ok(pathCandidates.includes(
+    '/opt/other/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js',
+  ))
+  assert.ok(pathCandidates.includes(
+    '/home/u/.bun/install/global/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js',
+  ))
+})
+
+test('auth module candidates are absolute, bounded, and duplicate-free', () => {
+  const candidates = authModuleCandidates(
+    '/usr/lib/node_modules/@deepseek-ai/dsh/lib/bin.js',
+    '/usr/bin/node',
+    { NODE_PATH: '/usr/lib/node_modules', HOME: '/home/u' },
+  )
+
+  assert.ok(candidates.length > 0)
+  assert.ok(candidates.every((candidate) => candidate === resolve(candidate)))
+  assert.equal(new Set(candidates).size, candidates.length)
+})
+
+test('locateAuthModule prefers and caches the in-process probe without a shell', async () => {
+  const controller = controllerWith({})
+  controller.cachedModule = null
+  let probes = 0
+  controller.probeInProcessModule = () => {
+    probes += 1
+    return '/probed/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js'
+  }
+
+  assert.equal(await controller.locateAuthModule(),
+    '/probed/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js')
+  assert.equal(await controller.locateAuthModule(),
+    '/probed/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js')
+  assert.equal(probes, 1)
+  assert.equal(controller.cachedModule,
+    '/probed/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js')
+})
+
+test('locateAuthModule falls back to the shell locator when the probe misses', async () => {
+  const commands: string[] = []
+  const controller = controllerWith({
+    shell: {
+      resolve: (spec: { command: string }) => spec,
+      run: async (spec: { command: string }) => {
+        commands.push(spec.command)
+        return { exitCode: 0, aborted: false, stdout: { text: '/from/pi-cli/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js\n' } }
+      },
+    },
+  })
+  controller.cachedModule = null
+  controller.probeInProcessModule = () => ''
+
+  assert.equal(await controller.locateAuthModule(),
+    '/from/pi-cli/node_modules/@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js')
+  assert.equal(commands.length, 1)
+  assert.ok(commands[0]?.includes('command -v pi'))
+})
+
+test('locateAuthModule returns empty when no probe and no shell service exist', async () => {
+  const controller = controllerWith({})
+  controller.cachedModule = null
+  controller.probeInProcessModule = () => ''
+
+  assert.equal(await controller.locateAuthModule(), '')
+  assert.equal(controller.cachedModule, null)
 })

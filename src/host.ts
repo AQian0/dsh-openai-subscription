@@ -1,6 +1,8 @@
 // Host service for ChatGPT subscription authorization in DSH.
 // OAuth is delegated to the OpenAI Codex integration bundled with DSH.
 
+import { existsSync } from 'node:fs'
+import { delimiter as pathDelimiter, dirname, join, resolve } from 'node:path'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
 import type { CredentialKey, CredentialProvider } from '@deepseek-ai/dsh-credentials'
@@ -44,6 +46,13 @@ const LOCATE_SCRIPT = [
   'fi',
   'printf "%s" "$CAND"',
 ].join('\n')
+
+/**
+ * The OpenAI Codex OAuth implementation, relative to a `node_modules` root.
+ * DSH's `llm-pi-ai` adapter already depends on this package, so the copy that
+ * matches the running DSH is the preferred source for device authorization.
+ */
+const AUTH_MODULE_PACKAGE_RELATIVE = '@earendil-works/pi-ai/dist/auth/oauth/openai-codex.js'
 
 const DRIVER_DEVICE = [
   "import { pathToFileURL } from 'node:url'",
@@ -222,6 +231,72 @@ function settingsConflict(error: unknown): boolean {
   return recordOf(error)?.code === 'SETTINGS_CONFLICT'
 }
 
+/**
+ * Filesystem candidates for the OpenAI auth module, derived from the running
+ * DSH process. The first candidate that exists is used, so the module always
+ * matches the pi-ai version bundled with the installed DSH regardless of how
+ * `pi` (or DSH itself) was installed; the shell locator below only runs when
+ * none of these probes hit.
+ */
+export function authModuleCandidates(
+  entryScript: string | undefined,
+  nodeBinary: string | undefined,
+  env: { NODE_PATH?: string | undefined; HOME?: string | undefined } | undefined,
+): string[] {
+  const candidates: string[] = []
+  const seen = new Set<string>()
+  const push = (value: string | undefined): void => {
+    if (!value) return
+    const normalized = resolve(value)
+    if (seen.has(normalized)) return
+    seen.add(normalized)
+    candidates.push(normalized)
+  }
+
+  // Walk up from the running DSH entry script. This finds the pi-ai copy
+  // bundled inside DSH's own installation for npm-, nvm-, and yarn-style
+  // layouts (global or workspace), even when `pi` is a standalone binary
+  // or missing entirely.
+  if (entryScript) {
+    let dir = dirname(entryScript)
+    for (let depth = 0; depth < 40 && dir; depth++) {
+      push(join(dir, 'node_modules', AUTH_MODULE_PACKAGE_RELATIVE))
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+
+  // Node's global module roots, mirroring how `module.globalPaths` is built:
+  // NODE_PATH entries plus the lib/node_modules directory beside the Node
+  // binary (also covers nvm-managed Node on macOS and Linux).
+  const globalRoots: string[] = []
+  if (nodeBinary) {
+    globalRoots.push(resolve(dirname(nodeBinary), '../lib/node_modules'))
+    globalRoots.push(join(dirname(nodeBinary), 'node_modules'))
+  }
+  const nodePath = env?.NODE_PATH
+  if (nodePath) {
+    for (const entry of nodePath.split(pathDelimiter)) {
+      if (entry) globalRoots.push(entry)
+    }
+  }
+  for (const root of globalRoots) {
+    // A directly installed pi-ai, or the hoisted copy under a globally
+    // installed DSH (npm hoists transitive dependencies into DSH's own
+    // node_modules; the nested path covers version-conflicted installs).
+    push(join(root, 'node_modules', AUTH_MODULE_PACKAGE_RELATIVE))
+    push(join(root, AUTH_MODULE_PACKAGE_RELATIVE))
+    push(join(root, '@deepseek-ai/dsh/node_modules', AUTH_MODULE_PACKAGE_RELATIVE))
+    push(join(root, '@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/node_modules', AUTH_MODULE_PACKAGE_RELATIVE))
+  }
+
+  // bun's global install root, matching the shell locator fallback.
+  if (env?.HOME) push(join(env.HOME, '.bun/install/global/node_modules', AUTH_MODULE_PACKAGE_RELATIVE))
+
+  return candidates
+}
+
 //#endregion
 
 /** Register source-mode remote methods without decorator syntax. */
@@ -301,11 +376,30 @@ class OpenAISubscriptionController extends TypertRemoteService {
     this.registerAuthorizationFlow(authorization)
   }
 
+  /**
+   * Locate the OpenAI auth module without spawning a shell. Probes the pi-ai
+   * copy shipped inside the running DSH first; returns '' when nothing hits.
+   */
+  private probeInProcessModule(): string {
+    if (typeof process === 'undefined' || !Array.isArray(process.argv)) return ''
+    const candidates = authModuleCandidates(process.argv[1], process.execPath, process.env)
+    for (const candidate of candidates) {
+      try {
+        if (existsSync(candidate)) return candidate
+      } catch {
+        // Unreadable or unavailable path: keep probing the remaining roots.
+      }
+    }
+    return ''
+  }
+
   private async locateAuthModule(): Promise<string> {
     if (this.cachedModule !== null) return this.cachedModule
     if (this.locatingModule !== null) return this.locatingModule
 
     const pending = (async (): Promise<string> => {
+      const probed = this.probeInProcessModule()
+      if (probed) return probed
       const shell = this.shell()
       if (shell === undefined) return ''
       try {
