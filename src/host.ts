@@ -9,6 +9,14 @@ import type { TimerService } from '@deepseek-ai/cordis-plugin-timer'
 import type { AuthorizationService } from '@deepseek-ai/dsh-authorization'
 import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { normalizeOAuthCredential, type OAuthCredential } from './oauth.js'
+import {
+  discoverOpenAIModels,
+  mergeModelCatalog,
+  removeManagedModels,
+  type DiscoveredModelCatalog,
+  type ModelDiscoveryOptions,
+  type ModelProfile,
+} from './models.js'
 
 /** Plugin-owned authorization metadata. */
 const KEY = 'dsh-openai-subscription/chatgpt' as CredentialKey
@@ -83,8 +91,17 @@ interface DriverMessage {
   credential?: unknown
 }
 
+/** Stable progress keys let the browser localize notices without exposing diagnostics. */
+type FlowNoticeKind =
+  | 'requesting-code'
+  | 'enter-code'
+  | 'refreshing'
+  | 'models-synced'
+  | 'models-sync-failed'
+
 /** Host-side notice queued for the polling client. Mirrors `AuthorizationNotice`. */
 interface FlowNotice {
+  kind?: FlowNoticeKind
   message: string
   url?: string
   code?: string
@@ -109,22 +126,38 @@ interface AbortControl {
 /** Callback used to report progress from a login path. */
 type Notify = (notice: FlowNotice) => void
 
-/** `openaiSubscription/status` reply. */
+/** `openaiSubscription/status` reply: semantic UI facts, never raw account metadata. */
 type StatusResult =
   | { configured: false; ready: boolean }
   | {
       configured: true
       ready: boolean
-      accountId: string | null
-      expires: number | null
-      loginMethod: string | null
-      obtainedAt: number | null
-      refreshedAt: number | null
-      hasRefresh: boolean
+      refreshable: boolean
+      modelsSynced: boolean
+      modelCount: number
     }
 
 /** `openaiSubscription/authorize` reply. */
 type AuthorizeResult = { started: false; error: string } | { started: true }
+
+/** `openaiSubscription/syncModels` reply. */
+interface ModelSyncResult {
+  synced: true
+  count: number
+}
+
+type ModelDiscovery = (
+  credential: { access: string; accountId?: string },
+  options?: ModelDiscoveryOptions,
+) => Promise<DiscoveredModelCatalog>
+
+interface LlmModelCatalog {
+  discoverModels(
+    settingsNs: string,
+    request: { provider?: string },
+    signal?: AbortSignal,
+  ): Promise<readonly { id: string }[]>
+}
 
 /** `openaiSubscription/poll` reply. */
 type PollResult =
@@ -138,10 +171,61 @@ function errorMessage(error: unknown): string {
   return message ? String(message) : String(error)
 }
 
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function grantPayload(record: unknown): Record<string, unknown> {
+  const typed = recordOf(record)
+  return typed?.kind === 'grant' ? recordOf(typed.payload) ?? {} : {}
+}
+
+function modelIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const ids: string[] = []
+  for (const candidate of value) {
+    const id = recordOf(candidate)?.id
+    if (typeof id === 'string' && id.length > 0 && !ids.includes(id)) ids.push(id)
+  }
+  return ids
+}
+
+function piRoute(section: unknown): Record<string, unknown> | null {
+  const providers = recordOf(recordOf(section)?.providers)
+  return providers === null ? null : recordOf(providers['openai-codex'])
+}
+
+function explicitRouteModels(user: unknown, base: unknown): unknown {
+  const userRoute = piRoute(user)
+  if (userRoute !== null && Object.prototype.hasOwnProperty.call(userRoute, 'models')) return userRoute.models
+  const baseRoute = piRoute(base)
+  if (baseRoute !== null && Object.prototype.hasOwnProperty.call(baseRoute, 'models')) return baseRoute.models
+  return undefined
+}
+
+function unionModelCatalog(remote: DiscoveredModelCatalog, builtin: readonly { id: string }[]): ModelProfile[] {
+  const models = remote.models.map((model) => ({ ...model }))
+  const mentionedUpstream = new Set(remote.seenIds)
+  for (const candidate of builtin) {
+    if (typeof candidate.id !== 'string' || candidate.id.length === 0 || mentionedUpstream.has(candidate.id)) continue
+    mentionedUpstream.add(candidate.id)
+    // Keep unmentioned catalog rows minimal so llm-pi-ai supplies complete
+    // metadata, but never resurrect an id the account endpoint explicitly hid.
+    models.push({ id: candidate.id })
+  }
+  return models
+}
+
+function settingsConflict(error: unknown): boolean {
+  return recordOf(error)?.code === 'SETTINGS_CONFLICT'
+}
+
 //#endregion
 
 /** Register source-mode remote methods without decorator syntax. */
-const REMOTE_METHODS = ['status', 'authorize', 'poll', 'cancel', 'logout'] as const
+const REMOTE_METHODS = ['status', 'authorize', 'poll', 'cancel', 'syncModels', 'logout'] as const
 
 /** Decorator context fields used by `Remote`. */
 interface MarkerContext {
@@ -178,6 +262,9 @@ class OpenAISubscriptionController extends TypertRemoteService {
   private cachedModule: string | null = null
   private locatingModule: Promise<string> | null = null
   private pendingBridge: FlowState | null = null
+  private syncingModels: Promise<ModelSyncResult> | null = null
+  private modelSyncController: AbortController | null = null
+  private modelDiscovery: ModelDiscovery = discoverOpenAIModels
 
   constructor(ctx: Context) {
     super(ctx, 'openaiSubscription', { namespace: 'openaiSubscription' })
@@ -198,6 +285,10 @@ class OpenAISubscriptionController extends TypertRemoteService {
 
   private authorization(): AuthorizationService | undefined {
     return this.ctx.get('authorization') as AuthorizationService | undefined
+  }
+
+  private llm(): LlmModelCatalog | undefined {
+    return this.ctx.get('llm') as LlmModelCatalog | undefined
   }
 
   private ensureAuthorizationFlow(): void {
@@ -251,7 +342,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
       notify({ message: '当前 DSH 环境缺少 OpenAI 登录组件，请更新 DSH 后重试。' })
       throw new Error('OpenAI login component unavailable')
     }
-    notify({ message: '正在向 OpenAI 请求设备登录码…' })
+    notify({ kind: 'requesting-code', message: '正在向 OpenAI 请求设备登录码…' })
     const spec = shell.resolve({
       command: 'node --input-type=module --eval ' + this.shq(DRIVER_DEVICE) + ' ' + this.shq(modulePath),
       timeoutMs: 16 * 60 * 1000,
@@ -281,6 +372,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
         try { msg = JSON.parse(line) as DriverMessage } catch { continue }
         if (typeof msg.userCode === 'string' && msg.userCode) {
           notify({
+            kind: 'enter-code',
             message: '请打开链接，使用有 Codex 权限的 ChatGPT 账号登录并输入设备码。',
             url: typeof msg.verificationUri === 'string' ? msg.verificationUri : 'https://auth.openai.com/codex/device',
             code: msg.userCode,
@@ -333,6 +425,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
       return {
         kind: 'grant' as const,
         payload: {
+          ...currentPayload,
           provider: 'openai',
           loginMethod: 'device_code',
           accountId: granted.accountId ?? null,
@@ -351,7 +444,14 @@ class OpenAISubscriptionController extends TypertRemoteService {
       throw new Error('Provider credential write failed')
     }
     if (control.aborted()) return null
-    if (await this.ensurePiRoute()) await this.markPiRouteManaged()
+    try {
+      await this.synchronizeModels(control.signal)
+      notify({ kind: 'models-synced', message: '可用模型已同步。' })
+    } catch (error) {
+      if (control.aborted()) return null
+      console.error('[openai-subscription] initial model sync failed: ' + errorMessage(error))
+      notify({ kind: 'models-sync-failed', message: '授权已保存，模型目录可稍后重试同步。' })
+    }
     return granted
   }
 
@@ -394,7 +494,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
     if (typeof secretPayload.expires === 'number' && Number.isFinite(secretPayload.expires) && secretPayload.expires > 0) previous.expires = secretPayload.expires
     if (typeof secretPayload.accountId === 'string' && secretPayload.accountId) previous.accountId = secretPayload.accountId
 
-    notify({ message: '正在刷新 ChatGPT 订阅授权…' })
+    notify({ kind: 'refreshing', message: '正在刷新 ChatGPT 订阅授权…' })
     const spec = shell.resolve({
       command: 'node --input-type=module --eval ' + this.shq(DRIVER_REFRESH) + ' ' + this.shq(modulePath),
       timeoutMs: 120000,
@@ -439,6 +539,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
       return {
         kind: 'grant' as const,
         payload: {
+          ...latestPayload,
           provider: 'openai',
           loginMethod: typeof latestPayload.loginMethod === 'string' ? latestPayload.loginMethod : 'refresh',
           accountId: next.accountId ?? null,
@@ -452,7 +553,14 @@ class OpenAISubscriptionController extends TypertRemoteService {
       }
     })
     if (control.aborted()) return null
-    if (await this.ensurePiRoute()) await this.markPiRouteManaged()
+    try {
+      await this.synchronizeModels(control.signal)
+      notify({ kind: 'models-synced', message: '授权与可用模型已更新。' })
+    } catch (error) {
+      if (control.aborted()) return null
+      console.error('[openai-subscription] model sync after refresh failed: ' + errorMessage(error))
+      notify({ kind: 'models-sync-failed', message: '授权已更新，模型目录可稍后重试同步。' })
+    }
     return next
   }
 
@@ -489,62 +597,194 @@ class OpenAISubscriptionController extends TypertRemoteService {
     }
   }
 
-  /** Enable the default provider without replacing user configuration. */
-  private async ensurePiRoute(): Promise<boolean> {
-    const settings = this.ctx.get('settings') as SettingsProvider | undefined
-    if (settings === undefined || typeof settings.mutate !== 'function') return false
-    try {
-      const descriptor = settings.describe({ redactSecrets: true }).find((entry) => entry.ns === 'llm-pi-ai')
-      if (descriptor === undefined) return false
-      const section = (descriptor.value && typeof descriptor.value === 'object') ? descriptor.value as { providers?: Record<string, unknown> } : {}
-      const providers = (section.providers && typeof section.providers === 'object') ? section.providers : {}
-      if (providers['openai-codex'] !== undefined) return false
-      await settings.mutate(
-        'llm-pi-ai',
-        [{ op: 'set', path: ['providers', 'openai-codex'], value: {} }],
-        descriptor.revision,
-      )
-      return true
-    } catch (error) {
-      console.error('[openai-subscription] enable openai-codex route failed: ' + errorMessage(error))
-      return false
-    }
+  /** Keep one cancellable model sync in flight so login, refresh, and UI actions cannot race. */
+  private synchronizeModels(signal?: AbortSignal, adoptExistingModels = false): Promise<ModelSyncResult> {
+    if (this.syncingModels !== null) return this.syncingModels
+    const controller = new AbortController()
+    const relayAbort = () => controller.abort(signal?.reason)
+    if (signal?.aborted) relayAbort()
+    else signal?.addEventListener('abort', relayAbort, { once: true })
+    const pending = this.performModelSync(controller.signal, adoptExistingModels)
+    this.syncingModels = pending
+    this.modelSyncController = controller
+    void pending.finally(() => {
+      signal?.removeEventListener('abort', relayAbort)
+      if (this.syncingModels === pending) this.syncingModels = null
+      if (this.modelSyncController === controller) this.modelSyncController = null
+    }).catch(() => {
+      // The original caller observes the failure; this branch only settles finally().
+    })
+    return pending
   }
 
-  /** Mark the default provider as plugin-managed. */
-  private async markPiRouteManaged(): Promise<void> {
+  /** Fetch the account-scoped catalog and replace only this plugin's previous rows. */
+  private async performModelSync(signal: AbortSignal, adoptExistingModels: boolean): Promise<ModelSyncResult> {
     const credentials = this.credentials()
-    if (credentials === undefined) return
-    try {
-      await credentials.modifyRecord(KEY, async (current) => {
-        if (current === undefined || current.kind !== 'grant') return undefined
-        const payload = (current.payload && typeof current.payload === 'object') ? current.payload as Record<string, unknown> : {}
-        return { ...current, payload: { ...payload, managedPiRoute: true } }
-      })
-    } catch (error) {
-      console.error('[openai-subscription] remember managed openai-codex route failed: ' + errorMessage(error))
+    if (credentials === undefined) throw new Error('DSH 凭证服务不可用，请重启后重试')
+    const settings = this.ctx.get('settings') as SettingsProvider | undefined
+    if (settings === undefined || typeof settings.mutate !== 'function') {
+      throw new Error('DSH 模型设置服务不可用，请重启后重试')
     }
+
+    const [ownerRecord, adapterRecord] = await Promise.all([
+      credentials.readRecord(KEY),
+      credentials.readRecord(PI_AI_RECORD),
+    ])
+    if (recordOf(ownerRecord)?.kind !== 'grant') throw new Error('尚未通过此插件连接 ChatGPT，请先完成登录')
+    const adapter = grantPayload(adapterRecord)
+    const access = typeof adapter.access === 'string' ? adapter.access : ''
+    if (!access) throw new Error('尚未连接 ChatGPT，请先完成登录')
+    const accountId = typeof adapter.accountId === 'string' && adapter.accountId.length > 0
+      ? adapter.accountId
+      : undefined
+    const discoveryCredential: { access: string; accountId?: string } = { access }
+    if (accountId !== undefined) discoveryCredential.accountId = accountId
+
+    // Refuse automatic adoption before any network request when an existing
+    // user/profile allow-list has no prior plugin ownership snapshot.
+    const initialDescriptor = settings.describe({ redactSecrets: true }).find((entry) => entry.ns === 'llm-pi-ai')
+    if (initialDescriptor === undefined) throw new Error('DSH 模型适配器未启用，请更新 DSH 后重试')
+    const initialPlugin = grantPayload(ownerRecord)
+    if (
+      !adoptExistingModels
+      && modelIds(initialPlugin.managedModels).length === 0
+      && explicitRouteModels(initialDescriptor.user, initialDescriptor.base) !== undefined
+    ) {
+      throw new Error('现有模型列表由配置管理，请在 ChatGPT 设置页确认同步')
+    }
+
+    const remoteModels = await this.modelDiscovery(discoveryCredential, { signal })
+    const llm = this.llm()
+    if (llm === undefined || typeof llm.discoverModels !== 'function') {
+      throw new Error('DSH 模型目录服务不可用，请重启后重试')
+    }
+    let builtinModels: readonly { id: string }[]
+    try {
+      builtinModels = await llm.discoverModels('llm-pi-ai', { provider: 'openai-codex' }, signal)
+    } catch (error) {
+      console.error('[openai-subscription] read installed openai-codex catalog failed: ' + errorMessage(error))
+      throw new Error('无法读取 DSH 内置模型目录，现有设置未更改')
+    }
+    const discovered = unionModelCatalog(remoteModels, builtinModels)
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (signal.aborted) throw new Error('模型同步已取消')
+      const [currentOwner, currentAdapter] = await Promise.all([
+        credentials.readRecord(KEY),
+        credentials.readRecord(PI_AI_RECORD),
+      ])
+      if (recordOf(currentOwner)?.kind !== 'grant') throw new Error('ChatGPT 连接已被移除')
+      const liveAdapter = grantPayload(currentAdapter)
+      const liveAccess = typeof liveAdapter.access === 'string' ? liveAdapter.access : ''
+      const liveAccountId = typeof liveAdapter.accountId === 'string' ? liveAdapter.accountId : undefined
+      if (!liveAccess || (accountId === undefined ? liveAccess !== access : liveAccountId !== accountId)) {
+        throw new Error('ChatGPT 连接在同步期间发生变化，请重试')
+      }
+
+      const descriptor = settings.describe({ redactSecrets: true }).find((entry) => entry.ns === 'llm-pi-ai')
+      if (descriptor === undefined) throw new Error('DSH 模型适配器未启用，请更新 DSH 后重试')
+      const plugin = grantPayload(currentOwner)
+      const explicitModels = explicitRouteModels(descriptor.user, descriptor.base)
+      if (!adoptExistingModels && modelIds(plugin.managedModels).length === 0 && explicitModels !== undefined) {
+        throw new Error('现有模型列表由配置管理，请在 ChatGPT 设置页确认同步')
+      }
+      const merged = mergeModelCatalog(
+        explicitModels,
+        plugin.managedModels,
+        discovered,
+        plugin.suppressedModelIds,
+      )
+      const createdRoute = piRoute(descriptor.value) === null
+      const operation = createdRoute
+        ? { op: 'set' as const, path: ['providers', 'openai-codex'], value: { models: merged.models } }
+        : { op: 'set' as const, path: ['providers', 'openai-codex', 'models'], value: merged.models }
+      try {
+        if (signal.aborted) throw new Error('模型同步已取消')
+        await settings.mutate('llm-pi-ai', [operation], descriptor.revision)
+      } catch (error) {
+        if (attempt < 2 && settingsConflict(error)) continue
+        if (settingsConflict(error)) throw new Error('模型设置刚刚发生变化，请重试同步')
+        throw error
+      }
+
+      try {
+        await credentials.modifyRecord(KEY, async (latest) => {
+          if (latest === undefined || latest.kind !== 'grant') throw new Error('ChatGPT 连接在同步期间被移除')
+          const payload = recordOf(latest.payload) ?? {}
+          if (accountId !== undefined && typeof payload.accountId === 'string' && payload.accountId !== accountId) {
+            throw new Error('ChatGPT 账号在同步期间发生变化')
+          }
+          return {
+            ...latest,
+            payload: {
+              ...payload,
+              managedPiRoute: payload.managedPiRoute === true || createdRoute,
+              managedModels: merged.managed,
+              suppressedModelIds: merged.suppressed,
+              modelsSyncedAt: Date.now(),
+            },
+          }
+        })
+      } catch (error) {
+        // Settings already contain the safe complete snapshot. A later sync will
+        // conservatively treat it as local rather than risk overwriting it.
+        console.error('[openai-subscription] remember managed model catalog failed: ' + errorMessage(error))
+      }
+      return { synced: true, count: modelIds(merged.models).length }
+    }
+    throw new Error('模型设置刚刚发生变化，请重试同步')
   }
 
-  /** Remove only the unchanged default provider created by this plugin. */
-  private async removePiRouteIfBare(): Promise<void> {
+  /** Remove only unchanged dynamic rows, preserving every local model and profile field. */
+  private async removeManagedPiRoute(managedRoute: boolean, managedModels: unknown): Promise<void> {
+    const managedIds = modelIds(managedModels)
+    if (!managedRoute && managedIds.length === 0) return
     const settings = this.ctx.get('settings') as SettingsProvider | undefined
-    if (settings === undefined || typeof settings.mutate !== 'function') return
-    try {
+    if (settings === undefined || typeof settings.mutate !== 'function') {
+      throw new Error('DSH 模型设置服务不可用，尚未断开连接')
+    }
+
+    for (let attempt = 0; attempt < 3; attempt++) {
       const descriptor = settings.describe({ redactSecrets: true }).find((entry) => entry.ns === 'llm-pi-ai')
-      if (descriptor === undefined) return
-      const user = (descriptor.user && typeof descriptor.user === 'object') ? descriptor.user as { providers?: Record<string, unknown> } : {}
-      const providers = (user.providers && typeof user.providers === 'object') ? user.providers : {}
-      const entry = providers['openai-codex']
-      if (entry === undefined) return
-      if (!(typeof entry === 'object' && entry !== null && Object.keys(entry).length === 0)) return
-      await settings.mutate(
-        'llm-pi-ai',
-        [{ op: 'unset', path: ['providers', 'openai-codex'] }],
-        descriptor.revision,
-      )
-    } catch (error) {
-      console.error('[openai-subscription] disable openai-codex route failed: ' + errorMessage(error))
+      if (descriptor === undefined) throw new Error('DSH 模型适配器未启用，尚未断开连接')
+      const route = piRoute(descriptor.user)
+      if (route === null) return
+
+      const profileFields = Object.keys(route).filter((key) => key !== 'models')
+      const existingIds = modelIds(route.models)
+      let operation:
+        | { op: 'unset'; path: string[] }
+        | { op: 'set'; path: string[]; value: ModelProfile[] }
+        | null = null
+
+      if (managedIds.length === 0) {
+        if (managedRoute && existingIds.length === 0 && profileFields.length === 0) {
+          operation = { op: 'unset', path: ['providers', 'openai-codex'] }
+        }
+      } else if (existingIds.length === 0) {
+        if (managedRoute && profileFields.length === 0) {
+          operation = { op: 'unset', path: ['providers', 'openai-codex'] }
+        }
+      } else {
+        const remaining = removeManagedModels(route.models, managedModels)
+        if (remaining.length < existingIds.length) {
+          operation = managedRoute && remaining.length === 0 && profileFields.length === 0
+            ? { op: 'unset', path: ['providers', 'openai-codex'] }
+            : remaining.length === 0
+              ? { op: 'unset', path: ['providers', 'openai-codex', 'models'] }
+              : { op: 'set', path: ['providers', 'openai-codex', 'models'], value: remaining }
+        }
+      }
+      if (operation === null) return
+
+      try {
+        await settings.mutate('llm-pi-ai', [operation], descriptor.revision)
+        return
+      } catch (error) {
+        if (attempt < 2 && settingsConflict(error)) continue
+        if (settingsConflict(error)) throw new Error('模型设置持续发生变化，尚未断开连接')
+        throw error
+      }
     }
   }
 
@@ -558,7 +798,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
     const state: FlowState = { notices: [], done: false, outcome: null, error: null, controller, task: null }
     this.pendingBridge = state
     const notify: Notify = (notice) => {
-      state.notices.push({ message: notice.message, url: notice.url, code: notice.code })
+      state.notices.push({ kind: notice.kind, message: notice.message, url: notice.url, code: notice.code })
       if (state.notices.length > 50) state.notices.shift()
     }
     const control: AbortControl = { signal: controller.signal, aborted: () => controller.signal.aborted }
@@ -628,22 +868,33 @@ class OpenAISubscriptionController extends TypertRemoteService {
       credentials.readRecord(KEY),
       credentials.readRecord(PI_AI_RECORD),
     ])
-    const p: Record<string, unknown> = record?.kind === 'grant' && record.payload && typeof record.payload === 'object'
-      ? record.payload as Record<string, unknown>
-      : {}
-    const adapter: Record<string, unknown> = adapterRecord?.kind === 'grant' && adapterRecord.payload && typeof adapterRecord.payload === 'object'
-      ? adapterRecord.payload as Record<string, unknown>
-      : {}
-    if (typeof adapter.access !== 'string' || !adapter.access) return { configured: false, ready: !!modulePath }
+    const plugin = grantPayload(record)
+    const adapter = grantPayload(adapterRecord)
+    if (recordOf(record)?.kind !== 'grant' || typeof adapter.access !== 'string' || !adapter.access) {
+      return { configured: false, ready: !!modulePath }
+    }
+    const managedIds = modelIds(plugin.managedModels)
+    const suppressed = new Set(
+      Array.isArray(plugin.suppressedModelIds)
+        ? plugin.suppressedModelIds.filter((id): id is string => typeof id === 'string')
+        : [],
+    )
+    const expectedIds = managedIds.filter((id) => !suppressed.has(id))
+    let configuredIds: string[] = []
+    try {
+      const settings = this.ctx.get('settings') as SettingsProvider | undefined
+      const descriptor = settings?.describe({ redactSecrets: true }).find((entry) => entry.ns === 'llm-pi-ai')
+      configuredIds = modelIds(explicitRouteModels(descriptor?.user, descriptor?.base))
+    } catch (error) {
+      console.error('[openai-subscription] read model sync status failed: ' + errorMessage(error))
+    }
+    const modelsSynced = managedIds.length > 0 && expectedIds.every((id) => configuredIds.includes(id))
     return {
       configured: true,
       ready: !!modulePath,
-      accountId: typeof adapter.accountId === 'string' ? adapter.accountId : (typeof p.accountId === 'string' ? p.accountId : null),
-      expires: typeof adapter.expires === 'number' && Number.isFinite(adapter.expires) ? adapter.expires : null,
-      loginMethod: typeof p.loginMethod === 'string' ? p.loginMethod : null,
-      obtainedAt: typeof p.obtainedAt === 'number' ? p.obtainedAt : null,
-      refreshedAt: typeof p.refreshedAt === 'number' ? p.refreshedAt : null,
-      hasRefresh: typeof adapter.refresh === 'string' && adapter.refresh.length > 0,
+      refreshable: typeof adapter.refresh === 'string' && adapter.refresh.length > 0,
+      modelsSynced,
+      modelCount: modelsSynced ? configuredIds.length : 0,
     }
   }
 
@@ -666,6 +917,12 @@ class OpenAISubscriptionController extends TypertRemoteService {
     return { ok: true }
   }
 
+  async syncModels(): Promise<ModelSyncResult> {
+    // This explicit UI action is the opt-in for treating an existing allow-list
+    // as locally owned additions on top of the live and installed catalogs.
+    return this.synchronizeModels(undefined, true)
+  }
+
   /** Cancel active authorization and remove plugin-managed credentials and settings. */
   async logout(): Promise<{ ok: true }> {
     const pending = this.pendingBridge
@@ -676,17 +933,49 @@ class OpenAISubscriptionController extends TypertRemoteService {
     }
     const authorization = this.authorization()
     if (authorization !== undefined) { try { authorization.cancel(KEY) } catch {} }
+    this.modelSyncController?.abort()
+    const activeSync = this.syncingModels
+    if (activeSync !== null) await activeSync.catch(() => {})
     const credentials = this.credentials()
     if (credentials === undefined) throw new Error('DSH credential service unavailable')
     const record = await credentials.readRecord(KEY)
-    const payload = record?.kind === 'grant' && record.payload && typeof record.payload === 'object'
-      ? record.payload as Record<string, unknown>
-      : {}
+    if (recordOf(record)?.kind !== 'grant') throw new Error('ChatGPT 连接不属于此插件')
+    const payload = grantPayload(record)
     const managedPiRoute = payload.managedPiRoute === true
-    // Delete the provider credential before reporting a successful logout.
+    const managedModels = payload.managedModels
+
+    // Keep the ownership snapshot until settings cleanup succeeds, so a
+    // revision conflict can never turn into an unrecoverable orphaned catalog.
+    await this.removeManagedPiRoute(managedPiRoute, managedModels)
+
+    // Remove duplicate secrets from the plugin record before deleting the
+    // provider credential. If provider deletion fails, retry remains possible
+    // without retaining a second access/refresh-token copy.
+    const containsSecret = (typeof payload.access === 'string' && payload.access.length > 0)
+      || (typeof payload.refresh === 'string' && payload.refresh.length > 0)
+    if (containsSecret) {
+      let staged = false
+      await credentials.modifyRecord(KEY, async (latest) => {
+        if (latest === undefined || latest.kind !== 'grant') throw new Error('ChatGPT 连接在断开期间发生变化')
+        const latestPayload = grantPayload(latest)
+        if (latestPayload.access !== payload.access || latestPayload.refresh !== payload.refresh) {
+          throw new Error('ChatGPT 连接在断开期间发生变化')
+        }
+        staged = true
+        return { kind: 'grant', payload: { provider: 'openai', cleanupPending: true } }
+      })
+      if (!staged) throw new Error('ChatGPT 连接在断开期间发生变化')
+    }
+
+    // The adapter credential is the authorization actually used for requests.
     await credentials.deleteRecord(PI_AI_RECORD)
-    await credentials.deleteRecord(KEY)
-    if (managedPiRoute) await this.removePiRouteIfBare()
+    try {
+      await credentials.deleteRecord(KEY)
+    } catch (error) {
+      // At this point settings are clean and both token copies are gone; a
+      // harmless cleanup marker may remain but must not make disconnect fail.
+      console.error('[openai-subscription] remove cleanup marker failed: ' + errorMessage(error))
+    }
     return { ok: true }
   }
 }
