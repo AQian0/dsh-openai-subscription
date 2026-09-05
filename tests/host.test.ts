@@ -6,8 +6,25 @@ import OpenAISubscriptionController from '../src/host.js'
 const MAIN_KEY = 'dsh-openai-subscription/chatgpt'
 const ADAPTER_KEY = 'llm-pi-ai/openai-codex'
 
-function controllerWith(services) {
-  const controller = Object.create(OpenAISubscriptionController.prototype)
+interface ControllerHarness {
+  ctx: { get(name: string): unknown }
+  registeredAuthorization: unknown
+  cachedModule: string | null
+  locatingModule: Promise<string> | null
+  pendingBridge: {
+    notices: Array<{ message: string; url?: string; code?: string }>
+    done: boolean
+    outcome: 'authorized' | 'cancelled' | 'failed' | null
+    error: string | null
+    controller: AbortController
+    task: Promise<void> | null
+  } | null
+  status: OpenAISubscriptionController['status']
+  logout: OpenAISubscriptionController['logout']
+}
+
+function controllerWith(services: Record<string, unknown>): ControllerHarness {
+  const controller = Object.create(OpenAISubscriptionController.prototype) as ControllerHarness
   controller.ctx = { get: (name) => services[name] }
   controller.registeredAuthorization = null
   controller.cachedModule = '/trusted/openai-codex.js'
@@ -17,7 +34,7 @@ function controllerWith(services) {
 }
 
 test('status reads tokens from the provider record and metadata from the plugin record', async () => {
-  const records = {
+  const records: Record<string, { kind: string; payload: Record<string, unknown> }> = {
     [MAIN_KEY]: {
       kind: 'grant',
       payload: { accountId: 'stale-account', expires: 1, refresh: 'stale-refresh', loginMethod: 'device_code' },
@@ -28,7 +45,7 @@ test('status reads tokens from the provider record and metadata from the plugin 
     },
   }
   const controller = controllerWith({
-    credentials: { readRecord: async (key) => records[key] },
+    credentials: { readRecord: async (key: string) => records[key] },
   })
 
   assert.deepEqual(await controller.status(), {
@@ -44,15 +61,15 @@ test('status reads tokens from the provider record and metadata from the plugin 
 })
 
 test('logout aborts and awaits an in-flight flow before deleting credentials', async () => {
-  let finishTask
-  const task = new Promise((resolve) => { finishTask = resolve })
+  let finishTask!: () => void
+  const task = new Promise<void>((resolve) => { finishTask = resolve })
   const flowController = new AbortController()
-  const calls = []
+  const calls: string[] = []
   const controller = controllerWith({
     authorization: { cancel: () => calls.push('cancel-official') },
     credentials: {
       readRecord: async () => ({ kind: 'grant', payload: {} }),
-      deleteRecord: async (key) => { calls.push('delete:' + key) },
+      deleteRecord: async (key: string) => { calls.push('delete:' + key) },
     },
   })
   controller.pendingBridge = {
@@ -79,11 +96,11 @@ test('logout aborts and awaits an in-flight flow before deleting credentials', a
 })
 
 test('logout fails when the provider credential cannot be deleted', async () => {
-  const calls = []
+  const calls: string[] = []
   const controller = controllerWith({
     credentials: {
       readRecord: async () => ({ kind: 'grant', payload: {} }),
-      deleteRecord: async (key) => {
+      deleteRecord: async (key: string) => {
         calls.push(key)
         if (key === ADAPTER_KEY) throw new Error('locked')
       },
@@ -95,7 +112,7 @@ test('logout fails when the provider credential cannot be deleted', async () => 
 })
 
 test('logout removes an owned empty route using the current settings revision', async () => {
-  const mutations = []
+  const mutations: unknown[][] = []
   const controller = controllerWith({
     credentials: {
       readRecord: async () => ({ kind: 'grant', payload: { managedPiRoute: true } }),
@@ -107,7 +124,7 @@ test('logout removes an owned empty route using the current settings revision', 
         revision: 7,
         user: { providers: { 'openai-codex': {} } },
       }],
-      mutate: async (...args) => { mutations.push(args) },
+      mutate: async (...args: unknown[]) => { mutations.push(args) },
     },
   })
 

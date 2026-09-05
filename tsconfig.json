@@ -13,6 +13,8 @@
     "isolatedModules": true,
     "declaration": true,
     "declarationMap": false,
+    "rootDir": "src",
+    "outDir": "dist",
     "noEmitOnError": true,
     "skipLibCheck": true
   },
