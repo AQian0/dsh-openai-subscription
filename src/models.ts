@@ -1,5 +1,7 @@
 /** Dynamic ChatGPT Codex model discovery and catalog ownership helpers. */
 
+import { SubscriptionError } from './errors.js'
+
 const MODELS_ENDPOINT = 'https://chatgpt.com/backend-api/codex/models'
 /**
  * Codex releases replace their workspace's 0.0.0 version at build time, while
@@ -115,7 +117,7 @@ function normalizeInputs(value: unknown): ModelInput[] | undefined {
  */
 export function parseOpenAIModelCatalog(value: unknown): DiscoveredModelCatalog {
   const root = recordOf(value)
-  if (root === null || !Array.isArray(root.models)) throw new Error('ChatGPT 模型服务返回了无效数据')
+  if (root === null || !Array.isArray(root.models)) throw new SubscriptionError('invalid-response')
 
   const candidates: Array<{ model: ModelProfile; priority: number; index: number }> = []
   const seenIds = new Set<string>()
@@ -148,27 +150,22 @@ export function parseOpenAIModelCatalog(value: unknown): DiscoveredModelCatalog 
 
   candidates.sort((left, right) => left.priority - right.priority || left.index - right.index)
   const models = candidates.map((candidate) => candidate.model)
-  if (models.length === 0) throw new Error('ChatGPT 当前没有返回可用模型')
+  if (models.length === 0) throw new SubscriptionError('models-empty')
   return { models, seenIds: [...seenIds] }
 }
 
 function abortableSignal(parent: AbortSignal | undefined, timeoutMs: number): {
   signal: AbortSignal
-  timedOut: () => boolean
   dispose: () => void
 } {
   const controller = new AbortController()
-  let timeoutReached = false
-  const onAbort = () => controller.abort(parent?.reason)
+  // Never propagate the caller's reason: it can contain tokens or remote text.
+  const onAbort = () => controller.abort(new SubscriptionError('cancelled'))
   if (parent?.aborted) onAbort()
   else parent?.addEventListener('abort', onAbort, { once: true })
-  const timeout = setTimeout(() => {
-    timeoutReached = true
-    controller.abort(new Error('model discovery timed out'))
-  }, timeoutMs)
+  const timeout = setTimeout(() => controller.abort(new SubscriptionError('timeout')), timeoutMs)
   return {
     signal: controller.signal,
-    timedOut: () => timeoutReached,
     dispose: () => {
       clearTimeout(timeout)
       parent?.removeEventListener('abort', onAbort)
@@ -176,32 +173,58 @@ function abortableSignal(parent: AbortSignal | undefined, timeoutMs: number): {
   }
 }
 
-class ResponseTooLargeError extends Error {}
+/** Bound even implementations whose fetch/read promises ignore the signal. */
+async function awaitWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  let onAbort = () => {}
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) onAbort()
+  })
+  try {
+    return await Promise.race([aborted, promise])
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+  }
+}
+
+function cancelBody(response: Response): void {
+  // Cancellation is best-effort, not another unbounded part of the deadline.
+  try { void response.body?.cancel().catch(() => {}) } catch { /* Already unavailable. */ }
+}
 
 async function readBoundedResponse(response: Response, signal: AbortSignal): Promise<string> {
+  signal.throwIfAborted()
   if (response.body === null) return ''
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let total = 0
   let text = ''
-  const cancel = () => { void reader.cancel(signal.reason).catch(() => {}) }
-  signal.addEventListener('abort', cancel, { once: true })
+  let complete = false
   try {
     while (true) {
-      if (signal.aborted) throw signal.reason
-      const chunk = await reader.read()
+      signal.throwIfAborted()
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await awaitWithAbort(reader.read(), signal)
+      } catch {
+        signal.throwIfAborted()
+        throw new SubscriptionError('network')
+      }
       if (chunk.done) break
       total += chunk.value.byteLength
-      if (total > MAX_RESPONSE_BYTES) throw new ResponseTooLargeError()
+      if (total > MAX_RESPONSE_BYTES) throw new SubscriptionError('invalid-response')
       text += decoder.decode(chunk.value, { stream: true })
     }
-    if (signal.aborted) throw signal.reason
+    signal.throwIfAborted()
+    complete = true
     return text + decoder.decode()
-  } catch (error) {
-    await reader.cancel().catch(() => {})
-    throw error
   } finally {
-    signal.removeEventListener('abort', cancel)
+    // Do not await cancel(): an underlying source can stall or reject it. The
+    // pending read is handled by awaitWithAbort and its lock is always released.
+    if (!complete) {
+      try { void reader.cancel().catch(() => {}) } catch { /* Already unavailable. */ }
+    }
     reader.releaseLock()
   }
 }
@@ -211,13 +234,15 @@ export async function discoverOpenAIModels(
   credential: ModelDiscoveryCredential,
   options: ModelDiscoveryOptions = {},
 ): Promise<DiscoveredModelCatalog> {
-  if (nonEmptyString(credential.access) === undefined) throw new Error('ChatGPT 授权不可用，请重新登录')
+  if (options.signal?.aborted) throw new SubscriptionError('cancelled')
+  if (nonEmptyString(credential.access) === undefined) throw new SubscriptionError('not-connected')
   const fetcher = options.fetch ?? globalThis.fetch
-  if (typeof fetcher !== 'function') throw new Error('当前运行环境无法连接 ChatGPT 模型服务')
+  if (typeof fetcher !== 'function') throw new SubscriptionError('network')
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new TypeError('timeoutMs must be positive')
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new SubscriptionError('invalid-response')
 
   const control = abortableSignal(options.signal, timeoutMs)
+  let response: Response | undefined
   try {
     const url = new URL(MODELS_ENDPOINT)
     url.searchParams.set('client_version', CLIENT_VERSION)
@@ -230,38 +255,46 @@ export async function discoverOpenAIModels(
     const accountId = nonEmptyString(credential.accountId)
     if (accountId !== undefined) headers.set('chatgpt-account-id', accountId)
 
-    let response: Response
     try {
-      response = await fetcher(url, { method: 'GET', headers, signal: control.signal, redirect: 'error' })
+      control.signal.throwIfAborted()
+      const pending = fetcher(url, { method: 'GET', headers, signal: control.signal, redirect: 'error' })
+        .then((result) => {
+          // A non-cooperative fetch may finish after discovery already stopped.
+          if (control.signal.aborted) {
+            cancelBody(result)
+            control.signal.throwIfAborted()
+          }
+          response = result
+          return result
+        })
+      response = await awaitWithAbort(pending, control.signal)
     } catch {
-      if (options.signal?.aborted) throw new Error('模型同步已取消')
-      if (control.timedOut()) throw new Error('获取 ChatGPT 模型超时，请稍后重试')
-      throw new Error('无法连接 ChatGPT 模型服务，请检查网络后重试')
+      control.signal.throwIfAborted()
+      throw new SubscriptionError('network')
     }
 
-    if (response.status === 401 || response.status === 403) {
-      throw new Error('ChatGPT 授权已失效，请刷新授权后重试')
+    if (!response.ok) {
+      if (response.status === 401) throw new SubscriptionError('authorization-expired')
+      if (response.status === 403) throw new SubscriptionError('access-denied')
+      if (response.status === 429) throw new SubscriptionError('rate-limited')
+      throw new SubscriptionError('models-unavailable')
     }
-    if (response.status === 429) throw new Error('模型同步请求过于频繁，请稍后重试')
-    if (!response.ok) throw new Error(`ChatGPT 模型服务暂时不可用（HTTP ${response.status}）`)
 
     const contentLength = Number(response.headers.get('content-length'))
-    if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
-      throw new Error('ChatGPT 模型服务返回的数据过大')
+    if (contentLength > MAX_RESPONSE_BYTES) {
+      throw new SubscriptionError('invalid-response')
     }
-    let text: string
-    try {
-      text = await readBoundedResponse(response, control.signal)
-    } catch (error) {
-      if (error instanceof ResponseTooLargeError) throw new Error('ChatGPT 模型服务返回的数据过大')
-      if (options.signal?.aborted) throw new Error('模型同步已取消')
-      if (control.timedOut()) throw new Error('获取 ChatGPT 模型超时，请稍后重试')
-      throw new Error('读取 ChatGPT 模型数据失败，请稍后重试')
-    }
+    const text = await readBoundedResponse(response, control.signal)
     let body: unknown
-    try { body = JSON.parse(text) } catch { throw new Error('ChatGPT 模型服务返回了无效数据') }
+    try { body = JSON.parse(text) } catch { throw new SubscriptionError('invalid-response') }
     return parseOpenAIModelCatalog(body)
+  } catch (error) {
+    control.signal.throwIfAborted()
+    if (error instanceof SubscriptionError) throw error
+    throw new SubscriptionError('network')
   } finally {
+    // Includes non-OK responses, oversized headers, and failures before reading.
+    if (response !== undefined && !response.bodyUsed) cancelBody(response)
     control.dispose()
   }
 }

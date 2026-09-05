@@ -9,6 +9,10 @@ test('rejects malformed credentials or an invalid access token', () => {
   assert.equal(normalizeOAuthCredential({}), null)
   assert.equal(normalizeOAuthCredential({ access: '' }), null)
   assert.equal(normalizeOAuthCredential({ access: 42 }), null)
+  for (const access of [' ', '\t', 'token\r\ninjected', 'token\0']) {
+    assert.equal(normalizeOAuthCredential({ access }), null)
+  }
+  assert.equal(normalizeOAuthCredential(Object.assign([], { access: 'token' })), null)
 })
 
 test('returns supported OAuth fields and drops unknown properties', () => {

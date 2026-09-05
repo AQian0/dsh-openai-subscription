@@ -7,7 +7,7 @@ export interface OAuthCredential {
 }
 
 function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined
+  return typeof value === 'string' && value.trim().length > 0 && !/[\r\n\0]/.test(value) ? value : undefined
 }
 
 function positiveFiniteNumber(value: unknown): number | undefined {
@@ -22,7 +22,7 @@ export function normalizeOAuthCredential(
   value: unknown,
   fallback: Partial<OAuthCredential> = {},
 ): OAuthCredential | null {
-  if (typeof value !== 'object' || value === null) return null
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   const raw = value as Record<string, unknown>
   const access = nonEmptyString(raw.access)
   if (access === undefined) return null
