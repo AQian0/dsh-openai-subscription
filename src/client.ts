@@ -7,6 +7,7 @@ interface FlowNotice {
   kind?: 'requesting-code' | 'enter-code' | 'refreshing' | 'models-synced' | 'models-sync-failed'
   url?: string
   code?: string
+  errorCode?: string
 }
 
 interface StatusInfo {
@@ -15,21 +16,28 @@ interface StatusInfo {
   refreshable: boolean
   modelsSynced: boolean
   modelCount: number
+  unavailableReason?: string
+  credentialState: 'valid' | 'expired' | 'unknown'
+  cleanupAvailable: boolean
+  flowPending: boolean
 }
 
 interface PollInfo {
   status: 'idle' | 'pending' | 'done'
   notices: FlowNotice[]
   outcome: 'authorized' | 'cancelled' | 'failed' | null
+  errorCode?: string
 }
 
 interface AuthorizeInfo {
   started: boolean
+  errorCode?: string
 }
 
 interface ModelSyncInfo {
   synced: true
   count: number
+  warningCode?: string
 }
 
 interface RemoteResult<T> {
@@ -178,13 +186,58 @@ const ZH: Record<string, string> = {
   'error.poll': '授权状态暂时中断，正在自动重试。',
   'error.start': '无法启动授权，请稍后重试。',
   'error.cancel': '无法取消授权，请重试。',
-  'error.sync': '模型同步失败，现有模型设置未被覆盖。',
+  'error.sync': '模型同步未完成，请重新读取状态并检查模型设置后重试。',
   'error.disconnect': '无法断开连接，请重试。',
   'error.clipboard': '无法复制，请手动选择代码。',
   'dialog.sync.title': '合并并同步模型？',
   'dialog.sync.detail': '账号可见模型和 DSH 内置模型将合并到现有列表；你的新增模型、字段编辑和删除选择会被保留。',
   'dialog.disconnect.title': '断开 ChatGPT 连接？',
   'dialog.disconnect.detail': '这只会删除本机授权和插件管理的未修改模型项，不会注销或删除你的 ChatGPT 账号。',
+  'status.expired': '授权已过期',
+  'status.expired.detail': '已保存的授权已过期，请刷新授权或重新连接后再使用。',
+  'status.unknown': '已保存连接',
+  'status.unknown.detail': '尚无法确认授权是否有效。若请求失败，请刷新授权或重新连接。',
+  'status.failed': '无法读取连接状态',
+  'status.reloading': '正在重新读取状态…',
+  'status.stale': '显示的是上次读取的状态。',
+  'action.reload': '重新读取状态',
+  'action.retryPoll': '重试检查授权',
+  'action.select': '选择代码',
+  'device.manual': '代码已选中，请按 Ctrl+C 或 ⌘C 复制；也可长按代码复制。',
+  'device.code': '一次性设备代码',
+  'device.newTab': '在新标签页打开',
+  'error.unsafe-url': '验证地址不符合安全要求，已阻止打开。请取消后重试或更新 DSH。',
+  'error.poll-paused': '已暂停自动检查，设备授权可能仍在继续。请重试检查或取消授权。',
+  'error.poll-idle': '未找到本次授权记录，无法确认是否完成。请重新读取状态或取消后重新连接。',
+  'error.poll-unconfirmed': '无法确认保存的授权结果是否属于本次尝试。请重新读取状态，或取消后重新连接。',
+  'error.long-action': '请求超时，但本机操作可能仍在进行。请先重新读取状态，确认后再重试。',
+  'error.credentials-unavailable': '凭据服务不可用，请重启或更新 DSH。',
+  'error.shell-unavailable': '本机进程服务不可用，请重启或更新 DSH。',
+  'error.timer-unavailable': '计时服务不可用，请重启或更新 DSH。',
+  'error.component-unavailable': '登录组件不可用，请更新或重启 DSH。',
+  'error.runtime-unsupported': '当前运行环境不支持此登录方式，请更新 DSH。',
+  'error.busy': '另一项操作正在进行，请稍后重新读取状态。',
+  'error.invalid-method': '登录方式不受支持，请更新 DSH 后重新连接。',
+  'error.not-connected': '未找到本机授权，请连接 ChatGPT。',
+  'error.not-refreshable': '授权无法刷新，请重新连接 ChatGPT。',
+  'error.device-auth-disabled': '账号未启用设备授权，请在 ChatGPT 安全设置中启用后重试。',
+  'error.access-denied': '授权被拒绝，请检查账号权限后重试。',
+  'error.authorization-expired': '设备授权已过期，请重新连接以获取新代码。',
+  'error.rate-limited': '请求过于频繁，请稍后重试。',
+  'error.network': '无法连接服务，请检查网络后重试。',
+  'error.invalid-response': '服务返回了无效响应，请重试或更新 DSH。',
+  'error.process-exited': '登录进程提前退出，请重新连接或更新 DSH。',
+  'error.credential-write-failed': '无法保存本机授权，请检查本机权限后重试；也可断开以清理残留数据。',
+  'error.credential-changed': '本机授权已被其他操作更改，请重新读取状态后重试。',
+  'error.settings-unavailable': '设置服务不可用，请重启 DSH 后重试。',
+  'error.models-unavailable': '暂时无法获取模型目录，请稍后重试同步。',
+  'error.models-empty': '未获取到可用模型，请检查账号权限后重试。',
+  'error.models-confirmation-required': '现有模型列表需要确认合并，请确认后再同步。',
+  'error.settings-conflict': '模型设置已被其他操作更改，请重新读取状态后重试。',
+  'error.settings-write-failed': '无法保存模型设置，请检查本机权限后重试。',
+  'error.ownership-save-failed': '模型可能已更新，但清理记录未能保存。请重试同步并检查模型设置。',
+  'error.cancelled': '操作已取消。',
+  'error.unknown': '操作未完成，请重新读取状态后重试。',
 }
 
 const EN: Record<string, string> = {
@@ -237,13 +290,58 @@ const EN: Record<string, string> = {
   'error.poll': 'Authorization status was interrupted. Retrying automatically.',
   'error.start': 'Could not start authorization. Try again shortly.',
   'error.cancel': 'Could not cancel authorization. Try again.',
-  'error.sync': 'Model sync failed. Existing model settings were not overwritten.',
+  'error.sync': 'Model sync did not complete. Reload status and review model settings before retrying.',
   'error.disconnect': 'Could not disconnect. Try again.',
   'error.clipboard': 'Could not copy. Select the code manually.',
   'dialog.sync.title': 'Merge and sync models?',
   'dialog.sync.detail': 'Account-visible and DSH built-in models will be merged into the current list. Local additions, field edits, and deletion choices are preserved.',
   'dialog.disconnect.title': 'Disconnect ChatGPT?',
   'dialog.disconnect.detail': 'This only removes local authorization and unchanged plugin-managed model entries. It does not sign out of or delete your ChatGPT account.',
+  'status.expired': 'Authorization expired',
+  'status.expired.detail': 'Saved authorization has expired. Refresh or reconnect before using this subscription.',
+  'status.unknown': 'Connection saved',
+  'status.unknown.detail': 'Authorization validity is not confirmed. Refresh or reconnect if requests fail.',
+  'status.failed': 'Could not read connection status',
+  'status.reloading': 'Reading status again…',
+  'status.stale': 'Showing the last known status.',
+  'action.reload': 'Reload status',
+  'action.retryPoll': 'Retry authorization check',
+  'action.select': 'Select code',
+  'device.manual': 'Code selected. Press Ctrl+C or ⌘C to copy, or touch and hold the code.',
+  'device.code': 'One-time device code',
+  'device.newTab': 'Opens in a new tab',
+  'error.unsafe-url': 'The verification address did not pass safety checks and was blocked. Cancel and retry, or update DSH.',
+  'error.poll-paused': 'Automatic checks paused. Device authorization may still be running. Retry the check or cancel authorization.',
+  'error.poll-idle': 'No record of this authorization was found, so completion cannot be confirmed. Reload status, or cancel and reconnect.',
+  'error.poll-unconfirmed': 'The saved authorization result could not be linked to this attempt. Reload status, or cancel and reconnect.',
+  'error.long-action': 'The request timed out, but the local operation may still be running. Reload status before deciding whether to retry.',
+  'error.credentials-unavailable': 'The credentials service is unavailable. Restart or update DSH.',
+  'error.shell-unavailable': 'The local process service is unavailable. Restart or update DSH.',
+  'error.timer-unavailable': 'The timer service is unavailable. Restart or update DSH.',
+  'error.component-unavailable': 'The sign-in component is unavailable. Update or restart DSH.',
+  'error.runtime-unsupported': 'This runtime does not support sign-in. Update DSH.',
+  'error.busy': 'Another operation is running. Wait, then reload status.',
+  'error.invalid-method': 'This sign-in method is unsupported. Update DSH and reconnect.',
+  'error.not-connected': 'No local authorization was found. Connect ChatGPT.',
+  'error.not-refreshable': 'Authorization cannot be refreshed. Reconnect ChatGPT.',
+  'error.device-auth-disabled': 'Device authorization is disabled for this account. Enable it in ChatGPT security settings and retry.',
+  'error.access-denied': 'Authorization was denied. Check account access and retry.',
+  'error.authorization-expired': 'Device authorization expired. Reconnect to get a new code.',
+  'error.rate-limited': 'Too many requests. Wait before retrying.',
+  'error.network': 'The service could not be reached. Check the network and retry.',
+  'error.invalid-response': 'The service returned an invalid response. Retry or update DSH.',
+  'error.process-exited': 'The sign-in process exited early. Reconnect or update DSH.',
+  'error.credential-write-failed': 'Local authorization could not be saved. Check local permissions and retry, or disconnect to clean up remaining data.',
+  'error.credential-changed': 'Another operation changed local authorization. Reload status and retry.',
+  'error.settings-unavailable': 'The settings service is unavailable. Restart DSH and retry.',
+  'error.models-unavailable': 'The model catalog is temporarily unavailable. Retry model sync later.',
+  'error.models-empty': 'No available models were returned. Check account access and retry.',
+  'error.models-confirmation-required': 'Merging the existing model list needs confirmation. Confirm before syncing.',
+  'error.settings-conflict': 'Another operation changed model settings. Reload status and retry.',
+  'error.settings-write-failed': 'Model settings could not be saved. Check local permissions and retry.',
+  'error.ownership-save-failed': 'Models may have updated, but cleanup records could not be saved. Retry sync and review model settings.',
+  'error.cancelled': 'The operation was cancelled.',
+  'error.unknown': 'The operation did not complete. Reload status and retry.',
 }
 
 function fallbackTranslate(key: string, params: Record<string, string | number> = {}): string {
@@ -342,6 +440,8 @@ window.__ModuleLoader__.load({
   font-weight: 500;
   line-height: 20px;
   cursor: pointer;
+  text-decoration: none;
+  text-align: center;
   transition: background .16s ease, border-color .16s ease, opacity .16s ease, transform .16s ease;
 }
 .oasub-button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(15, 17, 21, .06)); }
@@ -372,6 +472,9 @@ window.__ModuleLoader__.load({
 .oasub-device-head { display: flex; flex-direction: column; gap: 3px; }
 .oasub-code {
   align-self: flex-start;
+  width: min(100%, 24ch);
+  min-width: 0;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(15, 17, 21, .2));
   margin: 0;
   padding: 10px 14px;
   border-radius: 10px;
@@ -415,18 +518,49 @@ window.__ModuleLoader__.load({
       tag.textContent = CSS
     }
 
-    type FailureCode = 'cancelled' | 'timeout' | 'request'
+    // Never translate or render arbitrary host diagnostics. Only these machine codes
+    // (or an exact RPC message envelope containing one) cross into the UI.
+    const ERROR_CODES = new Set([
+      'credentials-unavailable', 'shell-unavailable', 'timer-unavailable', 'component-unavailable',
+      'runtime-unsupported', 'busy', 'invalid-method', 'not-connected', 'not-refreshable',
+      'device-auth-disabled', 'access-denied', 'authorization-expired', 'rate-limited', 'network',
+      'timeout', 'invalid-response', 'process-exited', 'credential-write-failed', 'credential-changed',
+      'settings-unavailable', 'models-unavailable', 'models-empty', 'models-confirmation-required',
+      'settings-conflict', 'settings-write-failed', 'ownership-save-failed', 'cancelled', 'unknown',
+    ])
+
+    function allowedCode(value: unknown): string | undefined {
+      return typeof value === 'string' && ERROR_CODES.has(value) ? value : undefined
+    }
+
+    function recordOf(value: unknown): Record<string, unknown> | null {
+      return typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null
+    }
+
+    function failureCode(error: unknown): string | undefined {
+      const raw = recordOf(error)
+      const code = allowedCode(raw?.code) ?? allowedCode(raw?.errorCode)
+      if (code !== undefined) return code
+      const match = typeof raw?.message === 'string'
+        ? /^\[openai-subscription:([a-z-]+)\]$/.exec(raw.message)
+        : null
+      return allowedCode(match?.[1])
+    }
 
     class ClientFailure extends Error {
-      readonly code: FailureCode
-
-      constructor(code: FailureCode) {
-        super(code)
-        this.code = code
+      readonly code: string
+      constructor(code: string) {
+        super('Request failed')
+        this.code = allowedCode(code) ?? 'unknown'
       }
     }
 
     const RPC_TIMEOUT_MS = 15_000
+    const MUTATION_TIMEOUT_MS = 75_000
+    const MAX_POLL_FAILURES = 4
+    const MAX_POLL_DURATION_MS = 15 * 60_000
 
     function remoteCall<T>(
       connection: ConnectionService,
@@ -450,76 +584,70 @@ window.__ModuleLoader__.load({
           callback()
         }
         const onAbort = () => {
-          controller.abort(signal?.reason)
           finish(() => reject(new ClientFailure('cancelled')))
+          controller.abort()
         }
-
         if (signal?.aborted) {
           onAbort()
           return
         }
         signal?.addEventListener('abort', onAbort, { once: true })
         timeout = setTimeout(() => {
-          controller.abort()
           finish(() => reject(new ClientFailure('timeout')))
+          controller.abort()
         }, timeoutMs)
-
         let request: Promise<RemoteResult<unknown>>
         try {
           request = connection.rpc.call('/api', 'openaiSubscription/' + method, { args }, controller.signal)
-        } catch {
-          finish(() => reject(new ClientFailure('request')))
+        } catch (error: unknown) {
+          finish(() => reject(new ClientFailure(failureCode(error) ?? 'unknown')))
           return
         }
-        request.then((result) => {
+        Promise.resolve(request).then((result) => {
           finish(() => {
-            if (!result || result.ok !== true || result.value === undefined) {
-              console.warn('[openai-subscription] remote call failed:', method, result?.error?.code ?? 'invalid-result')
-              reject(new ClientFailure('request'))
-              return
+            if (!result || result.ok !== true) {
+              reject(new ClientFailure(failureCode(result?.error) ?? 'unknown'))
+            } else if (result.value === undefined) {
+              reject(new ClientFailure('invalid-response'))
+            } else {
+              resolve(result.value as T)
             }
-            resolve(result.value as T)
           })
-        }).catch(() => finish(() => reject(new ClientFailure('request'))))
+        }).catch((error: unknown) => finish(() => reject(new ClientFailure(failureCode(error) ?? 'unknown'))))
       })
     }
 
     function errorKey(error: unknown, fallback: string): string {
-      return error instanceof ClientFailure && error.code === 'timeout' ? 'error.timeout' : fallback
-    }
-
-    function recordOf(value: unknown): Record<string, unknown> | null {
-      return typeof value === 'object' && value !== null && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : null
+      const code = failureCode(error)
+      return code === undefined || code === 'unknown' ? fallback : 'error.' + code
     }
 
     function parseStatus(value: unknown): StatusInfo {
       const raw = recordOf(value)
-      if (raw === null || typeof raw.configured !== 'boolean' || typeof raw.ready !== 'boolean') throw new ClientFailure('request')
-      if (!raw.configured) {
-        return { configured: false, ready: raw.ready, refreshable: false, modelsSynced: false, modelCount: 0 }
-      }
+      if (raw === null || typeof raw.configured !== 'boolean' || typeof raw.ready !== 'boolean') throw new ClientFailure('invalid-response')
       return {
-        configured: true,
+        configured: raw.configured,
         ready: raw.ready,
-        refreshable: raw.refreshable === true,
-        modelsSynced: raw.modelsSynced === true,
-        modelCount: typeof raw.modelCount === 'number' && Number.isSafeInteger(raw.modelCount) && raw.modelCount >= 0
-          ? raw.modelCount
-          : 0,
+        refreshable: raw.configured && raw.refreshable === true,
+        modelsSynced: raw.configured && raw.modelsSynced === true,
+        modelCount: raw.configured && typeof raw.modelCount === 'number' && Number.isSafeInteger(raw.modelCount) && raw.modelCount >= 0
+          ? raw.modelCount : 0,
+        unavailableReason: allowedCode(raw.unavailableReason),
+        credentialState: raw.credentialState === 'valid' || raw.credentialState === 'expired' ? raw.credentialState : 'unknown',
+        cleanupAvailable: raw.cleanupAvailable === true || raw.configured,
+        flowPending: raw.flowPending === true,
       }
     }
 
     function parseAuthorize(value: unknown): AuthorizeInfo {
       const raw = recordOf(value)
-      if (raw === null || typeof raw.started !== 'boolean') throw new ClientFailure('request')
-      return { started: raw.started }
+      if (raw === null || typeof raw.started !== 'boolean') throw new ClientFailure('invalid-response')
+      return { started: raw.started, errorCode: allowedCode(raw.errorCode) }
     }
 
     function parsePoll(value: unknown): PollInfo {
       const raw = recordOf(value)
-      if (raw === null || (raw.status !== 'idle' && raw.status !== 'pending' && raw.status !== 'done')) throw new ClientFailure('request')
+      if (raw === null || (raw.status !== 'idle' && raw.status !== 'pending' && raw.status !== 'done')) throw new ClientFailure('invalid-response')
       const notices: FlowNotice[] = []
       if (Array.isArray(raw.notices)) {
         for (const candidate of raw.notices) {
@@ -528,10 +656,12 @@ window.__ModuleLoader__.load({
           const kind = notice.kind
           notices.push({
             kind: kind === 'requesting-code' || kind === 'enter-code' || kind === 'refreshing' || kind === 'models-synced' || kind === 'models-sync-failed'
-              ? kind
-              : undefined,
+              ? kind : undefined,
             url: typeof notice.url === 'string' ? notice.url : undefined,
-            code: typeof notice.code === 'string' ? notice.code : undefined,
+            // Device codes are not arbitrary log messages or credentials.
+            code: typeof notice.code === 'string' && /^[A-Za-z0-9-]{3,32}$/.test(notice.code)
+              ? notice.code : undefined,
+            errorCode: allowedCode(notice.errorCode),
           })
         }
       }
@@ -539,28 +669,32 @@ window.__ModuleLoader__.load({
         status: raw.status,
         notices,
         outcome: raw.outcome === 'authorized' || raw.outcome === 'cancelled' || raw.outcome === 'failed' ? raw.outcome : null,
+        errorCode: allowedCode(raw.errorCode),
       }
     }
 
     function parseModelSync(value: unknown): ModelSyncInfo {
       const raw = recordOf(value)
       if (raw === null || raw.synced !== true || typeof raw.count !== 'number' || !Number.isSafeInteger(raw.count) || raw.count < 0) {
-        throw new ClientFailure('request')
+        throw new ClientFailure('invalid-response')
       }
-      return { synced: true, count: raw.count }
+      return { synced: true, count: raw.count, warningCode: raw.warningCode == null ? undefined : allowedCode(raw.warningCode) ?? 'unknown' }
     }
 
     function safeVerificationUrl(value: unknown): string | null {
-      if (typeof value !== 'string') return null
+      if (typeof value !== 'string' || value !== value.trim()) return null
       try {
         const url = new URL(value)
-        return url.protocol === 'https:' ? url.href : null
+        return url.origin === 'https://auth.openai.com' && !url.username && !url.password &&
+          (url.pathname === '/codex/device' || url.pathname === '/codex/device/') && !url.search && !url.hash &&
+          /^https:\/\/auth\.openai\.com(?::443)?\/codex\/device\/?$/i.test(value)
+          ? url.href : null
       } catch {
         return null
       }
     }
 
-    type Phase = 'idle' | 'starting' | 'authorizing' | 'cancelling' | 'syncing' | 'disconnecting'
+    type Phase = 'idle' | 'starting' | 'authorizing' | 'paused' | 'syncing' | 'disconnecting'
     type ConfirmAction = 'sync' | 'disconnect' | null
     interface ToastState {
       tone: 'success' | 'warning' | 'error' | 'neutral'
@@ -581,27 +715,66 @@ window.__ModuleLoader__.load({
       const [flowMethod, setFlowMethod] = React.useState<'device_code' | 'refresh'>('device_code')
       const [device, setDevice] = React.useState<DeviceState | null>(null)
       const [notice, setNotice] = React.useState<ToastState | null>(null)
+      const [statusError, setStatusError] = React.useState<string | null>(null)
+      const [statusLoading, setStatusLoading] = React.useState(true)
+      const [pollError, setPollError] = React.useState<string | null>(null)
+      const [flowWarning, setFlowWarning] = React.useState<string | null>(null)
+      const [copyNotice, setCopyNotice] = React.useState<string | null>(null)
+      const [cancelPending, setCancelPending] = React.useState(false)
       const [confirm, setConfirm] = React.useState<ConfirmAction>(null)
       const [statusRevision, setStatusRevision] = React.useState(0)
       const actionLock = React.useRef(false)
+      const cancelAcknowledged = React.useRef(false)
+      const flowObserved = React.useRef(false)
+      const reloadRef = React.useRef<HTMLElement | null>(null)
+      const lifetime = React.useRef<AbortController | null>(null)
+      const phaseRef = React.useRef(phase)
+      const dialogRef = React.useRef<HTMLElement | null>(null)
+      const codeRef = React.useRef<HTMLInputElement | null>(null)
+      const returnFocus = React.useRef<HTMLElement | null>(null)
+      phaseRef.current = phase
 
       const busy = phase !== 'idle'
+      const polling = phase === 'authorizing'
       const configured = info?.configured === true
-      const ready = info?.ready !== false
-
+      const ready = info?.ready === true
       const reloadStatus = () => setStatusRevision((revision) => revision + 1)
+      const changePhase = (next: Phase) => {
+        phaseRef.current = next
+        setPhase(next)
+      }
+
+      React.useEffect(() => {
+        const controller = new AbortController()
+        lifetime.current = controller
+        actionLock.current = false
+        cancelAcknowledged.current = false
+        flowObserved.current = false
+        setCancelPending(false)
+        setDevice(null)
+        setCopyNotice(null)
+        changePhase('idle')
+        return () => { controller.abort() }
+      }, [connection])
 
       React.useEffect(() => {
         let alive = true
         const controller = new AbortController()
+        setStatusLoading(true)
         remoteCall<unknown>(connection, 'status', {}, controller.signal).then(parseStatus).then((status) => {
           if (!alive) return
           setInfo(status)
-          setNotice((current) => current?.tone === 'error' ? null : current)
+          // Status owns only its own feedback; action failures survive reloads.
+          setStatusError(null)
+          if (status.flowPending) flowObserved.current = true
+          if (status.flowPending && phaseRef.current === 'idle') {
+            setFlowStage(undefined)
+            changePhase('authorizing')
+          }
         }).catch((error: unknown) => {
           if (!alive || controller.signal.aborted) return
-          setNotice({ tone: 'error', key: errorKey(error, 'error.status') })
-        })
+          setStatusError(errorKey(error, 'error.status'))
+        }).finally(() => { if (alive) setStatusLoading(false) })
         return () => {
           alive = false
           controller.abort()
@@ -610,171 +783,289 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (props.subscribeReset === undefined) return
-        return props.subscribeReset(() => reloadStatus())
+        return props.subscribeReset(reloadStatus)
       }, [props.subscribeReset])
 
       React.useEffect(() => {
-        if (confirm === null) return
-        const closeOnEscape = (event: KeyboardEvent) => {
-          if (event.key === 'Escape' && !busy) setConfirm(null)
+        if (confirm === null || typeof document === 'undefined') return
+        const dialog = dialogRef.current
+        const previous = returnFocus.current ?? document.activeElement as HTMLElement | null
+        const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), a[href], input:not(:disabled), [tabindex="0"]',
+        ) ?? [])
+        const focusFirst = () => (focusable()[0] ?? dialog)?.focus()
+        focusFirst() // Start on Cancel, never the destructive confirmation.
+        const onKey = (event: KeyboardEvent) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            setConfirm(null)
+          } else if (event.key === 'Tab') {
+            const items = focusable()
+            const first = items[0]
+            const last = items[items.length - 1]
+            if (!first || !last) { event.preventDefault(); dialog?.focus(); return }
+            if (!dialog?.contains(document.activeElement) || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+              event.preventDefault()
+              ;(event.shiftKey ? last : first).focus()
+            }
+          }
         }
-        document.addEventListener('keydown', closeOnEscape)
-        return () => document.removeEventListener('keydown', closeOnEscape)
-      }, [confirm, busy])
+        const onFocus = (event: FocusEvent) => {
+          if (dialog && !dialog.contains(event.target as Node)) focusFirst()
+        }
+        document.addEventListener('keydown', onKey)
+        document.addEventListener('focusin', onFocus)
+        return () => {
+          document.removeEventListener('keydown', onKey)
+          document.removeEventListener('focusin', onFocus)
+          if (previous?.isConnected && !previous.matches(':disabled')) previous.focus()
+          else reloadRef.current?.focus()
+          returnFocus.current = null
+        }
+      }, [confirm])
 
       React.useEffect(() => {
-        if (phase !== 'authorizing' && phase !== 'cancelling') return
+        if (!polling) return
         let alive = true
+        let stopped = false
         let inFlight = false
         let failures = 0
-        let modelSyncPending = false
+        let nextPollAt = 0
+        const startedAt = Date.now()
         const controller = new AbortController()
-
-        const complete = (outcome: PollInfo['outcome']) => {
-          if (!alive) return
-          setDevice(null)
-          setFlowStage(undefined)
-          setPhase('idle')
-          if (outcome === 'authorized') {
-            setNotice(modelSyncPending
-              ? { tone: 'warning', key: 'toast.sync-pending' }
-              : { tone: 'success', key: 'toast.connected' })
-          }
-          else if (outcome === 'cancelled') setNotice({ tone: 'neutral', key: 'toast.cancelled' })
-          else setNotice({ tone: 'error', key: 'error.start' })
-          reloadStatus()
+        let stopTimer: (() => void) | undefined
+        const pause = (key: string) => {
+          stopped = true
+          stopTimer?.()
+          setPollError(key)
+          changePhase('paused')
         }
-
-        const applyNotices = (notices: FlowNotice[]) => {
-          for (const item of notices) {
-            if (item.kind !== undefined) setFlowStage(item.kind)
-            if (item.kind === 'enter-code' && item.code) {
-              setDevice({ code: item.code, url: safeVerificationUrl(item.url) })
-            } else if (item.kind === 'models-synced') {
-              setNotice({ tone: 'success', key: 'toast.connected' })
-            } else if (item.kind === 'models-sync-failed') {
-              modelSyncPending = true
-              setNotice({ tone: 'warning', key: 'toast.sync-pending' })
-            }
-          }
-        }
-
         const pollOnce = () => {
-          if (!alive || inFlight) return
+          if (!alive || stopped) return
+          if (Date.now() - startedAt >= MAX_POLL_DURATION_MS) {
+            pause('error.poll-paused')
+            controller.abort()
+            return
+          }
+          if (inFlight || Date.now() < nextPollAt) return
           inFlight = true
           remoteCall<unknown>(connection, 'poll', {}, controller.signal).then(parsePoll).then((poll) => {
-            if (!alive) return
+            if (!alive || stopped) return
             failures = 0
-            applyNotices(poll.notices)
-            if (poll.status === 'done') complete(poll.outcome)
-            else if (poll.status === 'idle') {
-              void remoteCall<unknown>(connection, 'status', {}, controller.signal).then(parseStatus).then((status) => {
-                if (!alive) return
-                setInfo(status)
-                complete(status.configured ? 'authorized' : 'failed')
-              }).catch(() => complete('failed'))
+            nextPollAt = 0
+            setPollError(null)
+            if (poll.status === 'pending') flowObserved.current = true
+            if ((poll.status === 'idle' || !flowObserved.current) && cancelAcknowledged.current) {
+              stopped = true
+              stopTimer?.()
+              setDevice(null)
+              setCopyNotice(null)
+              setFlowWarning(null)
+              setFlowStage(undefined)
+              setNotice({ tone: 'neutral', key: 'toast.cancelled' })
+              changePhase('idle')
+              reloadStatus()
+              return
+            }
+            if (poll.status === 'idle' || (poll.status === 'done' && poll.outcome === null)) {
+              // Configured may describe an older account. It proves nothing about this attempt.
+              pause(poll.status === 'idle' ? 'error.poll-idle' : 'error.invalid-response')
+              reloadStatus()
+              return
+            }
+            if (poll.status === 'done' && !flowObserved.current) {
+              // A retained terminal result may predate a timed-out authorize RPC.
+              pause('error.poll-unconfirmed')
+              reloadStatus()
+              return
+            }
+            let warning: string | null = null
+            for (const item of poll.notices) {
+              if (item.kind === 'requesting-code' || item.kind === 'enter-code' || item.kind === 'refreshing') setFlowStage(item.kind)
+              if (item.kind === 'enter-code') {
+                const url = safeVerificationUrl(item.url)
+                if (item.code) {
+                  const code = item.code
+                  setDevice((current) => current && current.code === code && current.url === url ? current : { code, url })
+                } else setDevice(null)
+                if (!url) warning = 'error.unsafe-url'
+                else if (!item.code) warning = 'error.invalid-response'
+              }
+              if (item.kind === 'models-sync-failed') warning = item.errorCode ? 'error.' + item.errorCode : 'toast.sync-pending'
+              else if (item.errorCode) warning = 'error.' + item.errorCode
+            }
+            setFlowWarning(warning)
+            if (poll.status === 'done') {
+              stopped = true
+              stopTimer?.()
+              setDevice(null)
+              setCopyNotice(null)
+              setFlowStage(undefined)
+              changePhase('idle')
+              if (poll.outcome === 'authorized') {
+                setNotice({ tone: warning ? 'warning' : 'success', key: warning ?? 'toast.connected' })
+              } else if (poll.outcome === 'cancelled') {
+                setNotice({ tone: 'neutral', key: 'toast.cancelled' })
+              } else {
+                const code = poll.errorCode ?? poll.notices.map((item) => item.errorCode).filter(Boolean).pop()
+                setNotice({ tone: 'error', key: code ? 'error.' + code : 'error.start' })
+              }
+              setFlowWarning(null)
+              reloadStatus()
             }
           }).catch((error: unknown) => {
-            if (!alive || controller.signal.aborted) return
+            if (!alive || stopped || controller.signal.aborted) return
             failures += 1
-            if (failures >= 2) setNotice({ tone: 'warning', key: errorKey(error, 'error.poll') })
+            if (failures >= MAX_POLL_FAILURES) pause('error.poll-paused')
+            else {
+              setPollError(errorKey(error, 'error.poll'))
+              nextPollAt = Date.now() + Math.min(8_000, 1_000 * 2 ** (failures - 1))
+            }
           }).finally(() => { inFlight = false })
         }
-
         pollOnce()
-        const stop = timer?.interval
-          ? timer.interval(pollOnce, 1_000)
-          : (() => {
-              const id = setInterval(pollOnce, 1_000)
-              return () => clearInterval(id)
-            })()
+        // Host timers are preferred, but browser timers also support settings-only mounts.
+        try { stopTimer = timer?.interval(pollOnce, 1_000) } catch { /* use browser timer below */ }
+        if (!stopTimer) {
+          const id = setInterval(pollOnce, 1_000)
+          stopTimer = () => clearInterval(id)
+        }
         return () => {
           alive = false
           controller.abort()
-          stop()
+          stopTimer?.()
         }
-      }, [phase, connection, timer])
+      }, [polling, connection, timer])
 
-      const startAuthorization = (method: 'device_code' | 'refresh') => {
+      const retryPolling = () => {
+        if (phaseRef.current !== 'paused' || actionLock.current) return
+        setPollError(null)
+        changePhase('authorizing')
+        reloadStatus()
+      }
+      const openConfirm = (action: ConfirmAction) => {
         if (busy || actionLock.current) return
+        returnFocus.current = typeof document === 'undefined' ? null : document.activeElement as HTMLElement | null
+        setConfirm(action)
+      }
+      const startAuthorization = (method: 'device_code' | 'refresh') => {
+        const signal = lifetime.current?.signal
+        if (phaseRef.current !== 'idle' || actionLock.current || !signal || signal.aborted) return
         actionLock.current = true
+        cancelAcknowledged.current = false
+        flowObserved.current = false
         setNotice(null)
+        setPollError(null)
+        setFlowWarning(null)
+        setCopyNotice(null)
         setDevice(null)
         setFlowMethod(method)
         setFlowStage(method === 'refresh' ? 'refreshing' : 'requesting-code')
-        setPhase('starting')
-        remoteCall<unknown>(connection, 'authorize', { method }).then(parseAuthorize).then((result) => {
+        changePhase('starting')
+        remoteCall<unknown>(connection, 'authorize', { method }, signal).then(parseAuthorize).then((result) => {
+          if (signal.aborted) return
           if (!result.started) {
-            setNotice({ tone: 'error', key: 'error.start' })
-            setPhase('idle')
+            setNotice({ tone: 'error', key: result.errorCode ? 'error.' + result.errorCode : 'error.start' })
+            changePhase('idle')
+            reloadStatus()
             return
           }
-          setPhase('authorizing')
+          flowObserved.current = true
+          changePhase('authorizing')
         }).catch((error: unknown) => {
-          void remoteCall<unknown>(connection, 'cancel', {}).catch(() => {})
+          if (signal.aborted) return
+          // A timeout does not prove the host failed to start. Never cancel implicitly.
           setNotice({ tone: 'error', key: errorKey(error, 'error.start') })
-          setPhase('idle')
-        }).finally(() => { actionLock.current = false })
-      }
-
-      const cancelAuthorization = () => {
-        if ((phase !== 'authorizing' && phase !== 'starting') || actionLock.current) return
-        actionLock.current = true
-        setPhase('cancelling')
-        remoteCall<unknown>(connection, 'cancel', {}).catch((error: unknown) => {
-          setNotice({ tone: 'error', key: errorKey(error, 'error.cancel') })
-          setPhase('authorizing')
-        }).finally(() => { actionLock.current = false })
-      }
-
-      const synchronizeModels = () => {
-        if (busy || actionLock.current) return
-        actionLock.current = true
-        setConfirm(null)
-        setNotice(null)
-        setPhase('syncing')
-        remoteCall<unknown>(connection, 'syncModels', {}, undefined, 25_000).then(parseModelSync).then((result) => {
-          setNotice({ tone: 'success', key: 'toast.synced', params: { count: result.count } })
+          const code = failureCode(error)
+          changePhase(code === 'timeout' || code === 'network' || code === 'unknown' || code === 'invalid-response' ? 'paused' : 'idle')
           reloadStatus()
+        }).finally(() => { if (!signal.aborted) actionLock.current = false })
+      }
+      const cancelAuthorization = () => {
+        const signal = lifetime.current?.signal
+        if ((phaseRef.current !== 'authorizing' && phaseRef.current !== 'paused') || actionLock.current || !signal || signal.aborted) return
+        actionLock.current = true
+        setCancelPending(true)
+        remoteCall<unknown>(connection, 'cancel', {}, signal).then(() => {
+          if (signal.aborted) return
+          // Idle after acknowledged cancellation is safe to dismiss; never infer authorization.
+          cancelAcknowledged.current = true
+          if (phaseRef.current === 'paused') { setPollError(null); changePhase('authorizing') }
         }).catch((error: unknown) => {
-          setNotice({ tone: 'error', key: errorKey(error, 'error.sync') })
+          if (!signal.aborted) setNotice({ tone: 'error', key: errorKey(error, 'error.cancel') })
         }).finally(() => {
-          actionLock.current = false
-          setPhase('idle')
+          if (!signal.aborted) { actionLock.current = false; setCancelPending(false) }
         })
       }
-
-      const requestModelSync = () => {
-        if (info?.modelsSynced) synchronizeModels()
-        else setConfirm('sync')
-      }
-
-      const disconnect = () => {
-        if (busy || actionLock.current) return
+      const synchronizeModels = (confirmed = false) => {
+        const signal = lifetime.current?.signal
+        if (phaseRef.current !== 'idle' || actionLock.current || !signal || signal.aborted) return
         actionLock.current = true
         setConfirm(null)
         setNotice(null)
-        setPhase('disconnecting')
-        remoteCall<unknown>(connection, 'logout', {}, undefined, 25_000).then(() => {
-          setInfo({ configured: false, ready, refreshable: false, modelsSynced: false, modelCount: 0 })
+        changePhase('syncing')
+        let needsConfirmation = false
+        remoteCall<unknown>(connection, 'syncModels', confirmed ? { confirmed: true } : {}, signal, MUTATION_TIMEOUT_MS).then(parseModelSync).then((result) => {
+          if (signal.aborted) return
+          setNotice(result.warningCode
+            ? { tone: 'warning', key: 'error.' + result.warningCode }
+            : { tone: 'success', key: 'toast.synced', params: { count: result.count } })
+        }).catch((error: unknown) => {
+          if (signal.aborted) return
+          setNotice({ tone: 'error', key: failureCode(error) === 'timeout' ? 'error.long-action' : errorKey(error, 'error.sync') })
+          needsConfirmation = failureCode(error) === 'models-confirmation-required'
+        }).finally(() => {
+          if (!signal.aborted) {
+            actionLock.current = false
+            changePhase('idle')
+            if (needsConfirmation) {
+              returnFocus.current = typeof document === 'undefined' ? null : document.activeElement as HTMLElement | null
+              setConfirm('sync')
+            }
+            reloadStatus()
+          }
+        })
+      }
+      const requestModelSync = () => {
+        if (info?.modelsSynced) synchronizeModels()
+        else openConfirm('sync')
+      }
+      const disconnect = () => {
+        const signal = lifetime.current?.signal
+        if (phaseRef.current !== 'idle' || actionLock.current || !signal || signal.aborted) return
+        actionLock.current = true
+        setConfirm(null)
+        setNotice(null)
+        changePhase('disconnecting')
+        remoteCall<unknown>(connection, 'logout', {}, signal, MUTATION_TIMEOUT_MS).then(() => {
+          if (signal.aborted) return
           setDevice(null)
           setNotice({ tone: 'success', key: 'toast.disconnected' })
         }).catch((error: unknown) => {
-          setNotice({ tone: 'error', key: errorKey(error, 'error.disconnect') })
+          if (!signal.aborted) setNotice({ tone: 'error', key: failureCode(error) === 'timeout' ? 'error.long-action' : errorKey(error, 'error.disconnect') })
         }).finally(() => {
-          actionLock.current = false
-          setPhase('idle')
+          if (!signal.aborted) {
+            actionLock.current = false
+            changePhase('idle')
+            reloadStatus()
+          }
         })
       }
-
+      const selectCode = () => {
+        codeRef.current?.focus()
+        codeRef.current?.select()
+        setCopyNotice('device.manual')
+      }
       const copyCode = () => {
-        if (device === null || typeof navigator.clipboard?.writeText !== 'function') {
-          setNotice({ tone: 'error', key: 'error.clipboard' })
-          return
-        }
-        navigator.clipboard.writeText(device.code).then(() => {
-          setNotice({ tone: 'success', key: 'toast.copied' })
-        }).catch(() => setNotice({ tone: 'error', key: 'error.clipboard' }))
+        if (device === null) return
+        const signal = lifetime.current?.signal
+        try {
+          if (typeof navigator === 'undefined' || typeof navigator.clipboard?.writeText !== 'function') { selectCode(); return }
+          Promise.resolve(navigator.clipboard.writeText(device.code)).then(() => {
+            if (!signal?.aborted) setCopyNotice('toast.copied')
+          }).catch(() => { if (!signal?.aborted) selectCode() })
+        } catch { selectCode() }
       }
 
       const progressKey = flowStage === 'enter-code'
@@ -785,20 +1076,25 @@ window.__ModuleLoader__.load({
             ? 'progress.requesting-code'
             : 'progress.authorizing'
 
+      const statusKey = configured
+        ? info?.credentialState === 'expired' ? 'status.expired' : info?.credentialState === 'valid' ? 'status.connected' : 'status.unknown'
+        : ready ? 'status.disconnected' : 'status.unavailable'
       const statusCard = info === null
-        ? el('div', { className: 'oasub-card oasub-skeleton', role: 'status', 'aria-live': 'polite' },
-            el('div', { className: 'oasub-status-title' }, t('status.loading')),
+        ? el('div', { className: 'oasub-card' + (statusLoading ? ' oasub-skeleton' : ''), role: 'status', 'aria-live': 'polite' },
+            el('div', { className: 'oasub-status-title' }, t(statusLoading ? 'status.loading' : 'status.failed')),
           )
-        : el('section', { className: 'oasub-card', 'aria-busy': busy },
+        : el('section', { className: 'oasub-card' },
             el('div', { className: 'oasub-status-line' },
               el('div', { className: 'oasub-status-copy' },
                 el('div', { className: 'oasub-status-title' },
-                  el('span', { className: 'oasub-dot ' + (configured ? 'success' : ready ? '' : 'warning'), 'aria-hidden': true }),
-                  t(configured ? 'status.connected' : ready ? 'status.disconnected' : 'status.unavailable'),
+                  el('span', { className: 'oasub-dot ' + (statusKey === 'status.connected' ? 'success' : statusKey === 'status.disconnected' ? '' : 'warning'), 'aria-hidden': true }),
+                  t(statusKey),
                 ),
-                el('div', { className: 'oasub-status-detail' },
-                  t(configured ? 'status.connected.detail' : ready ? 'status.disconnected.detail' : 'status.unavailable.detail'),
-                ),
+                el('div', { className: 'oasub-status-detail' }, t(statusKey + '.detail')),
+                !ready && configured
+                  ? el('div', { className: 'oasub-status-detail' }, t('status.unavailable')) : null,
+                !ready && info.unavailableReason
+                  ? el('div', { className: 'oasub-status-detail' }, t('error.' + info.unavailableReason)) : null,
               ),
               configured && info.modelsSynced
                 ? el('span', { className: 'oasub-pill' }, t('model.count', { count: info.modelCount }))
@@ -837,21 +1133,13 @@ window.__ModuleLoader__.load({
                     ? t('action.refreshing')
                     : t(info.refreshable ? 'action.refresh' : 'action.reconnect'))
                 : null,
-              configured
+              info.cleanupAvailable
                 ? el('button', {
                     type: 'button',
                     className: 'oasub-button danger quiet',
                     disabled: busy,
-                    onClick: () => setConfirm('disconnect'),
+                    onClick: () => openConfirm('disconnect'),
                   }, phase === 'disconnecting' ? t('action.disconnecting') : t('action.disconnect'))
-                : null,
-              phase === 'authorizing' || phase === 'starting' || phase === 'cancelling'
-                ? el('button', {
-                    type: 'button',
-                    className: 'oasub-button quiet',
-                    disabled: phase === 'cancelling',
-                    onClick: cancelAuthorization,
-                  }, t(phase === 'cancelling' ? 'action.cancelling' : 'action.cancel'))
                 : null,
             ),
           )
@@ -865,50 +1153,69 @@ window.__ModuleLoader__.load({
           ),
         ),
         statusCard,
+        statusError !== null
+          ? el('div', { className: 'oasub-notice error', role: 'alert' },
+              t(statusError), info !== null ? ' ' + t('status.stale') : null,
+              el('button', { type: 'button', className: 'oasub-button quiet', disabled: statusLoading, onClick: reloadStatus }, t('action.retry')),
+            ) : null,
+        el('div', { className: 'oasub-actions' },
+          el('button', { ref: reloadRef, type: 'button', className: 'oasub-button', disabled: statusLoading, onClick: reloadStatus },
+            t(statusLoading ? 'status.reloading' : 'action.reload')),
+        ),
         device !== null
-          ? el('section', { className: 'oasub-card oasub-device', role: 'status', 'aria-live': 'polite' },
+          ? el('section', { className: 'oasub-card oasub-device', 'aria-label': t('device.title') },
               el('div', { className: 'oasub-device-head' },
                 el('div', { className: 'oasub-status-title' }, t('device.title')),
                 el('div', { className: 'oasub-status-detail' }, t('device.detail')),
               ),
-              el('code', { className: 'oasub-code' }, device.code),
+              el('input', { ref: codeRef, className: 'oasub-code', type: 'text', readOnly: true, value: device.code,
+                'aria-label': t('device.code'), autoComplete: 'off', spellCheck: false, onFocus: (event: { currentTarget: HTMLInputElement }) => event.currentTarget.select() }),
               el('div', { className: 'oasub-actions' },
                 device.url !== null
-                  ? el('button', { type: 'button', className: 'oasub-button primary', onClick: () => window.open(device.url ?? '', '_blank', 'noopener,noreferrer') }, t('action.open'))
+                  ? el('a', { className: 'oasub-button primary', href: device.url, target: '_blank', rel: 'noopener noreferrer',
+                      'aria-label': t('action.open') + ' — ' + t('device.newTab') }, t('action.open'))
                   : null,
                 el('button', { type: 'button', className: 'oasub-button', onClick: copyCode }, t('action.copy')),
-                el('button', { type: 'button', className: 'oasub-button quiet', onClick: cancelAuthorization }, t('action.cancel')),
+                el('button', { type: 'button', className: 'oasub-button', onClick: selectCode }, t('action.select')),
               ),
-            )
-          : phase === 'authorizing' || phase === 'starting' || phase === 'cancelling'
-            ? el('div', { className: 'oasub-notice', role: 'status', 'aria-live': 'polite' },
-                el('span', { className: 'oasub-dot warning', 'aria-hidden': true }),
-                t(progressKey),
-              )
-            : null,
+              copyNotice ? el('div', { role: 'status', 'aria-live': 'polite', className: 'oasub-status-detail' }, t(copyNotice)) : null,
+            ) : null,
+        phase === 'authorizing' || phase === 'starting'
+          ? el('div', { className: 'oasub-notice', role: 'status', 'aria-live': 'polite' },
+              el('span', { className: 'oasub-dot warning', 'aria-hidden': true }), t(cancelPending ? 'action.cancelling' : progressKey),
+            ) : null,
+        flowWarning
+          ? el('div', { className: 'oasub-notice warning', role: 'status' }, t(flowWarning)) : null,
+        pollError || phase === 'paused'
+          ? el('div', { className: 'oasub-notice warning', role: 'status', 'aria-live': 'polite' },
+              t(pollError ?? 'error.poll-paused'),
+              polling && pollError !== 'error.poll' ? ' ' + t('error.poll') : null,
+            ) : null,
+        phase === 'authorizing' || phase === 'paused'
+          ? el('div', { className: 'oasub-actions' },
+              phase === 'paused'
+                ? el('button', { type: 'button', className: 'oasub-button primary', disabled: cancelPending, onClick: retryPolling }, t('action.retryPoll')) : null,
+              el('button', { type: 'button', className: 'oasub-button', disabled: cancelPending, onClick: cancelAuthorization }, t(cancelPending ? 'action.cancelling' : 'action.cancel')),
+            ) : null,
         notice !== null
-          ? el('div', { className: 'oasub-notice ' + notice.tone, role: notice.tone === 'error' ? 'alert' : 'status', 'aria-live': 'polite' },
-              el('span', { 'aria-hidden': true }, notice.tone === 'success' ? '✓' : notice.tone === 'error' ? '!' : '•'),
-              t(notice.key, notice.params),
-              notice.key === 'error.status'
-                ? el('button', { type: 'button', className: 'oasub-button quiet', disabled: busy, onClick: reloadStatus }, t('action.retry'))
-                : null,
-            )
-          : null,
+          ? el('div', { className: 'oasub-notice ' + notice.tone, role: notice.tone === 'error' ? 'alert' : 'status' },
+              el('span', { 'aria-hidden': true }, notice.tone === 'success' ? '✓' : notice.tone === 'error' ? '!' : '•'), t(notice.key, notice.params),
+            ) : null,
         confirm !== null
           ? el('div', { className: 'oasub-dialog-backdrop', role: 'presentation', onMouseDown: (event: { target: unknown; currentTarget: unknown }) => {
               if (!busy && event.target === event.currentTarget) setConfirm(null)
             } },
-              el('div', { className: 'oasub-dialog', role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'oasub-dialog-title' },
+              el('div', { ref: dialogRef, tabIndex: -1, className: 'oasub-dialog', role: 'dialog', 'aria-modal': true,
+                'aria-labelledby': 'oasub-dialog-title', 'aria-describedby': 'oasub-dialog-detail' },
                 el('h3', { id: 'oasub-dialog-title' }, t(confirm === 'sync' ? 'dialog.sync.title' : 'dialog.disconnect.title')),
-                el('p', null, t(confirm === 'sync' ? 'dialog.sync.detail' : 'dialog.disconnect.detail')),
+                el('p', { id: 'oasub-dialog-detail' }, t(confirm === 'sync' ? 'dialog.sync.detail' : 'dialog.disconnect.detail')),
                 el('div', { className: 'oasub-actions' },
                   el('button', { type: 'button', className: 'oasub-button', disabled: busy, onClick: () => setConfirm(null) }, t('action.cancel')),
                   el('button', {
                     type: 'button',
                     className: 'oasub-button ' + (confirm === 'sync' ? 'primary' : 'danger'),
                     disabled: busy,
-                    onClick: confirm === 'sync' ? synchronizeModels : disconnect,
+                    onClick: confirm === 'sync' ? () => synchronizeModels(true) : disconnect,
                   }, t(confirm === 'sync' ? 'action.continue' : 'action.disconnect')),
                 ),
               ),
