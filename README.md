@@ -18,9 +18,22 @@ Use a ChatGPT subscription with Codex access in [DeepSeek Harness](https://githu
 
 - DSH CLI 0.1.2-rc.1 or newer
 - `pnpm` available on `PATH` for plugin installation
-- Node.js 22.19 or newer available as `node`
+- DSH running under Node.js 22.19 or newer; authorization reuses that process's Node executable instead of a different `node` on `PATH`
 - A [ChatGPT plan with Codex access](https://help.openai.com/en/articles/11369540-use-codex-with-a-chatgpt-plan) and device-code authorization enabled
 - Network access to `auth.openai.com` and `chatgpt.com`
+
+### Platforms and deployment
+
+| Environment | Implementation and requirements |
+| --- | --- |
+| Linux / macOS | DSH's default Bash executor; no GNU `readlink` or separate `pi` CLI required. |
+| Windows | DSH's default PowerShell executor and Windows Node; installation paths may contain spaces, Unicode, or apostrophes. Custom Bash executors are not part of this default configuration. |
+| WSL / SSH / containers | Execution follows the DSH host's OS. Verification can happen in a browser on another device; no browser-to-host OAuth callback port is needed. |
+| Mobile / remote Web | Use the existing DSH Web settings page. If clipboard access is unavailable, the device code is selected for manual copying. |
+
+Discovery prefers the running DSH and its `llm-pi-ai` dependency, following symlinks and pnpm virtual-store dependencies. Fallbacks include npm/nvm, `NODE_PATH`, pnpm, bun, and Windows user installation roots. It never executes a discovered `pi` program.
+
+CI is configured for Linux/macOS/Windows × Node.js 22.19/24 × npm/pnpm builds and mocked regression tests; this matrix does not imply real OpenAI sign-in has been validated on every platform. The Web settings entry is not a native TUI/ACP settings interface.
 
 ## Installation
 
@@ -41,6 +54,14 @@ Restart `dsh web`, then refresh the existing page. DSH registers the plugin auto
 5. Select an available model from the DSH model picker.
 
 `llm-pi-ai` automatically renews refreshable OAuth credentials during model requests. **Refresh authorization** in this settings page is primarily a manual recovery action.
+
+### Status and recovery
+
+- Settings distinguish saved authorization, expired or unknown token lifetime, model-sync results, and missing host services. Saved authorization does not guarantee account access or remaining quota.
+- Refreshing/reopening the page or reconnecting Web can recover pending device authorization from the host. Device codes are not stored in browser storage and are removed from host progress snapshots when authorization ends.
+- Polling uses bounded backoff. Repeated failures or the waiting limit expose **Resume status checks** instead of retrying forever or treating an old connection as a successful new authorization. Device authorization waits up to 15 minutes.
+- A sync/disconnect timeout does not prove that the host operation failed. Reload status before deciding whether to retry; the plugin does not automatically repeat mutations or silently cancel sign-in.
+- Host-side locking prevents sign-in, sync, and disconnect from overwriting one another across settings pages. Disconnect remains available after a partial credential save.
 
 ### Model synchronization rules
 
@@ -74,12 +95,16 @@ Restart the Web profile and refresh the page afterward.
 ## Troubleshooting
 
 - **The settings entry is missing:** confirm the plugin is installed in the `web` profile with `dsh plugin --profile web why dsh-openai-subscription`, then restart DSH and refresh the page.
-- **Authorization cannot start:** confirm `node --version` meets the requirement and check access to the OpenAI authentication service.
-- **Sign-in component unavailable:** the sign-in module is taken first from the `llm-pi-ai` adapter dependency bundled with the running DSH (no separate `pi` CLI install is needed); npm/nvm/bun-managed global `pi` installs are only a fallback. If the message persists, restart DSH and try again.
-- **The device code is rejected:** enable device-code authorization in ChatGPT security settings and start a new connection.
-- **Models need syncing:** select **Sync models**. If an explicit list already exists, review the confirmation and continue; local edits are preserved.
-- **Model sync fails:** existing settings remain unchanged. Check access to `chatgpt.com` and authorization status, then retry; refresh authorization first if needed.
-- **Authorization cannot recover:** disconnect and complete device authorization again.
+- **Sign-in cannot start / missing component or service:** check the Node version running DSH and its credential, Shell, and model-adapter services; update or restart DSH. A separate `pi` CLI is not required.
+- **Device authorization disabled (`device-auth-disabled`):** enable it in ChatGPT security settings, then connect again.
+- **Expired authorization (`authorization-expired`):** refresh authorization; if rejected, disconnect and sign in again.
+- **Access denied (`access-denied`):** check Codex/workspace access and DSH execution permissions. HTTP 403 does not necessarily mean an expired token; the plugin never automatically relaxes sandbox permissions.
+- **Network / timeout (`network` / `timeout`):** check DNS, TLS, proxies, and access from the DSH host to `auth.openai.com` and `chatgpt.com`. Browser connectivity does not prove host connectivity.
+- **Rate limited (`rate-limited`):** wait before retrying; do not repeatedly click or loop authorization refreshes.
+- **Models need syncing:** select **Sync models** and review the confirmation. Existing allow-lists are merged only after explicit confirmation.
+- **Invalid or empty model response:** incomplete responses do not replace the existing catalog; retry later or check plan access.
+- **Ownership save failed (`ownership-save-failed`):** the complete model list was written, but its ownership snapshot was not. Fix credential-store writes before syncing again; do not assume the list is unchanged. Cleanup conservatively keeps entries with uncertain ownership.
+- **Credential save or cleanup failed:** fix DSH credential-store permissions and retry; the retained Disconnect action allows cleanup to continue. Never paste tokens or device codes for troubleshooting.
 
 ## Compatibility notes
 
@@ -87,9 +112,13 @@ Dynamic discovery uses the backend endpoint used by the official ChatGPT Codex c
 
 ## Security and privacy
 
-Your password is entered only on OpenAI's website; the plugin never receives it. OAuth credentials remain in the local DSH credential store. The settings status API returns only semantic facts such as connection, refresh capability, model-sync state, and model count. It does not return tokens, internal account IDs, or exact token-expiry timestamps. Do not share the temporary device code.
+Your password is entered only on OpenAI's website; the plugin never receives it. Verification links are restricted to OpenAI's official device-authorization page. “Local” means the DSH host, not the browser device in a remote deployment. OAuth credentials remain in that host's DSH credential store and travel through subprocess stdin/stdout, not command arguments or environment variables. The settings status API returns semantic facts such as connection, token-lifetime category, refresh capability, and model state—not tokens, internal account IDs, or exact expiry timestamps. Plugin error feedback and logs use safe categories instead of forwarding raw upstream diagnostics. Do not share the temporary device code.
 
 OpenAI's terms, privacy policy, model availability, and usage limits still apply. This is an independent community plugin and is not affiliated with or endorsed by OpenAI or DeepSeek.
+
+## Development and validation
+
+After installing dependencies, run `npm run check` (or `pnpm run check`) for typechecking, build, and regression tests. Use `npm pack --dry-run --ignore-scripts` to inspect published files. Tests mock OAuth, network, and credential services; they do not access real accounts. After editing the plugin, rebuild and reinstall/load that version, restart `dsh web`, and refresh the existing page. Editing source alone does not update the installed GUI plugin.
 
 ## License
 
