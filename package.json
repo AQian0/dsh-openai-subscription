@@ -1,7 +1,7 @@
 {
   "name": "dsh-openai-subscription",
   "version": "0.1.0",
-  "description": "OpenAI (ChatGPT Plus/Pro/Team) subscription sign-in for DeepSeek Harness — device-code OAuth reusing @earendil-works/pi-ai, storing the grant in the DSH credentials service.",
+  "description": "ChatGPT subscription sign-in for DeepSeek Harness via OpenAI device authorization.",
   "type": "module",
   "main": "./src/host.js",
   "exports": {
@@ -27,6 +27,7 @@
     "src",
     "cordis.patch.yml",
     "README.md",
+    "README.zh.md",
     "LICENSE"
   ],
   "keywords": [

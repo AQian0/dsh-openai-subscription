@@ -1,4 +1,4 @@
-/** A validated OAuth credential safe to persist or mirror into pi-ai. */
+/** Normalized OAuth fields accepted from the authorization subprocess. */
 export interface OAuthCredential {
   access: string
   refresh?: string
@@ -15,11 +15,8 @@ function positiveFiniteNumber(value: unknown): number | undefined {
 }
 
 /**
- * Validate an untrusted credential returned by the OAuth subprocess.
- *
- * A newly issued access token is always required. Providers may omit stable
- * fields such as a rotating refresh token, expiry, or account id on refresh;
- * those fields inherit from the previously validated credential when supplied.
+ * Require a new access token and inherit missing optional fields from a
+ * previously normalized credential.
  */
 export function normalizeOAuthCredential(
   value: unknown,

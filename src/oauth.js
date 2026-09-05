@@ -5,11 +5,8 @@ function positiveFiniteNumber(value) {
     return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 /**
- * Validate an untrusted credential returned by the OAuth subprocess.
- *
- * A newly issued access token is always required. Providers may omit stable
- * fields such as a rotating refresh token, expiry, or account id on refresh;
- * those fields inherit from the previously validated credential when supplied.
+ * Require a new access token and inherit missing optional fields from a
+ * previously normalized credential.
  */
 export function normalizeOAuthCredential(value, fallback = {}) {
     if (typeof value !== 'object' || value === null)

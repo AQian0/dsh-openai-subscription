@@ -10,7 +10,6 @@ interface StatusInfo {
     ready?: boolean;
     accountId?: string | null;
     expires?: number | null;
-    loginMethod?: string | null;
 }
 /** `openaiSubscription/poll` reply. */
 interface PollInfo {
@@ -43,7 +42,7 @@ interface ConnectionService {
 interface ClientTimer {
     interval(callback: () => void, delay: number): () => void;
 }
-/** Context the vendored cordis Loader passes to `apply`. */
+/** Context passed to the client plugin. */
 interface ClientContext {
     get(name: string): unknown;
     connection: ConnectionService;

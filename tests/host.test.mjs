@@ -16,7 +16,7 @@ function controllerWith(services) {
   return controller
 }
 
-test('status reports the adapter-facing credential as the authoritative token', async () => {
+test('status reads tokens from the provider record and metadata from the plugin record', async () => {
   const records = {
     [MAIN_KEY]: {
       kind: 'grant',
@@ -43,7 +43,7 @@ test('status reports the adapter-facing credential as the authoritative token', 
   })
 })
 
-test('logout aborts and joins an in-flight local flow before deleting credentials', async () => {
+test('logout aborts and awaits an in-flight flow before deleting credentials', async () => {
   let finishTask
   const task = new Promise((resolve) => { finishTask = resolve })
   const flowController = new AbortController()
@@ -78,7 +78,7 @@ test('logout aborts and joins an in-flight local flow before deleting credential
   ])
 })
 
-test('logout never reports success when the adapter credential cannot be deleted', async () => {
+test('logout fails when the provider credential cannot be deleted', async () => {
   const calls = []
   const controller = controllerWith({
     credentials: {
@@ -94,7 +94,7 @@ test('logout never reports success when the adapter credential cannot be deleted
   assert.deepEqual(calls, [ADAPTER_KEY])
 })
 
-test('logout removes only a marked bare route and uses its settings revision', async () => {
+test('logout removes an owned empty route using the current settings revision', async () => {
   const mutations = []
   const controller = controllerWith({
     credentials: {

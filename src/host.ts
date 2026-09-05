@@ -1,34 +1,5 @@
-// dsh-openai-subscription — Host half (composition version, TypeScript source).
-// OpenAI (ChatGPT Plus/Pro/Team) subscription sign-in for DeepSeek Harness.
-//
-// Mount this package as a composition row:
-//
-//   - insert:
-//       - id: openai-subscription
-//         name: 'dsh-openai-subscription'
-//
-// The default export is a cordis CLASS plugin (a Service subclass — cordis
-// instantiates it once per fiber). It provides the `openaiSubscription`
-// service and exposes the `openaiSubscription/*` Typert Remote endpoints in
-// source mode: the gateway discovers them from the @Remote markers attached
-// to the class below, so no generated ./typert artifact is required. The web
-// client half calls them through `connection.rpc.call('/api', ...)`.
-//
-// This file is authored in TypeScript and compiled in place (`tsc` emits
-// host.js / host.d.ts next to it), so the runtime entry paths in
-// package.json (`./src/host.js`) stay stable.
-//
-// The OAuth work itself is delegated to the OpenAI Codex implementation
-// shipped inside DSH's bundled pi dependency (@earendil-works/pi-ai): a node
-// subprocess imports `dist/auth/oauth/openai-codex.js` and drives the
-// device-code flow (deviceauth/usercode -> user login -> deviceauth/token ->
-// oauth/token exchange). Credentials are committed to the DSH credentials
-// service under the key `dsh-openai-subscription/chatgpt` (kind: grant);
-// record keys must be `<scope>/<id>`, where scope is the owning plugin's
-// registered name.
-//
-// When the `authorization` service is mounted, the official AuthorizationFlow
-// is registered as well (device-code login / refresh).
+// Host service for ChatGPT subscription authorization in DSH.
+// OAuth is delegated to the OpenAI Codex integration bundled with DSH.
 
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Context } from '@deepseek-ai/cordis'
@@ -39,15 +10,10 @@ import type { AuthorizationService } from '@deepseek-ai/dsh-authorization'
 import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { normalizeOAuthCredential, type OAuthCredential } from './oauth.js'
 
-/** Credential-record address this plugin owns: `<scope>/<id>`, scope = plugin name. */
+/** Plugin-owned authorization metadata. */
 const KEY = 'dsh-openai-subscription/chatgpt' as CredentialKey
 
-/**
- * Mirror record address the DSH pi-ai LLM adapter (@deepseek-ai/dsh-llm-pi-ai)
- * reads for its `openai-codex` catalog route. Storing the subscription grant
- * here — in the exact pi-ai credential shape — is what makes the GPT models of
- * the `openai-codex` route resolvable per request without a second sign-in.
- */
+/** Credential consumed by the `openai-codex` model provider. */
 const PI_AI_RECORD = 'llm-pi-ai/openai-codex' as CredentialKey
 
 const LOCATE_SCRIPT = [
@@ -166,7 +132,7 @@ type PollResult =
   | { status: 'pending'; notices: FlowNotice[] }
   | { status: 'done'; notices: FlowNotice[]; outcome: FlowState['outcome']; error: string | null }
 
-/** Stringify an unknown thrown value the way the original JavaScript did. */
+/** Format an unknown error for logs and user-facing messages. */
 function errorMessage(error: unknown): string {
   const message = (error as { message?: unknown } | null | undefined)?.message
   return message ? String(message) : String(error)
@@ -174,17 +140,10 @@ function errorMessage(error: unknown): string {
 
 //#endregion
 
-/**
- * Apply `Remote` markers to a TypertRemoteService subclass without the
- * decorator syntax (plain JavaScript output cannot rely on `@Remote` — the
- * DSH host runtime does not parse decorators). This replays exactly what the
- * decorator API would do: each method gets an initializer that records the
- * marker on the class prototype, which is what the Typert gateway reads for
- * source-mode endpoint discovery.
- */
+/** Register source-mode remote methods without decorator syntax. */
 const REMOTE_METHODS = ['status', 'authorize', 'poll', 'cancel', 'logout'] as const
 
-/** The subset of the standard method-decorator context the `Remote` marker path consumes. */
+/** Decorator context fields used by `Remote`. */
 interface MarkerContext {
   kind: 'method'
   name: string
@@ -222,10 +181,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
 
   constructor(ctx: Context) {
     super(ctx, 'openaiSubscription', { namespace: 'openaiSubscription' })
-    // NOTE: services are resolved lazily (below), never captured here. The
-    // loader activates rows by service availability and this plugin declares
-    // no inject, so `shell`/`timer`/... may not be mounted yet while the
-    // constructor runs — capturing them now would freeze `undefined` forever.
+    // Resolve optional services per operation so late mounts and reloads work.
   }
 
   private credentials(): CredentialProvider | undefined {
@@ -275,8 +231,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
     this.locatingModule = pending
     try {
       const path = await pending
-      // Cache only a successful lookup. A missing late-mounted shell service or
-      // dependency can then recover on the next status/authorize call.
+      // Retry failed lookups because the dependency may mount later.
       if (path) this.cachedModule = path
       return path
     } finally {
@@ -287,14 +242,14 @@ class OpenAISubscriptionController extends TypertRemoteService {
   private async runDevice(control: AbortControl, notify: Notify): Promise<OAuthCredential | null> {
     const credentials = this.credentials()
     if (credentials === undefined) {
-      notify({ message: 'credentials 服务不可用，无法保存授权凭证。' })
-      throw new Error('openai subscription credentials service unavailable')
+      notify({ message: 'DSH 凭证服务不可用，请重启后重试。' })
+      throw new Error('DSH credential service unavailable')
     }
     const modulePath = await this.locateAuthModule()
     const shell = this.shell()
     if (!modulePath || shell === undefined) {
-      notify({ message: '未找到 @earendil-works/pi-ai 的 OpenAI 登录模块（DSH 的 pi 依赖缺失或路径异常）。' })
-      throw new Error('openai subscription auth module not found')
+      notify({ message: '当前 DSH 环境缺少 OpenAI 登录组件，请更新 DSH 后重试。' })
+      throw new Error('OpenAI login component unavailable')
     }
     notify({ message: '正在向 OpenAI 请求设备登录码…' })
     const spec = shell.resolve({
@@ -326,7 +281,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
         try { msg = JSON.parse(line) as DriverMessage } catch { continue }
         if (typeof msg.userCode === 'string' && msg.userCode) {
           notify({
-            message: '请打开链接，用你的 OpenAI（ChatGPT Plus/Pro/Team）订阅账号登录，然后输入下面的验证码。',
+            message: '请打开链接，使用有 Codex 权限的 ChatGPT 账号登录并输入设备码。',
             url: typeof msg.verificationUri === 'string' ? msg.verificationUri : 'https://auth.openai.com/codex/device',
             code: msg.userCode,
           })
@@ -341,7 +296,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
         const timer = this.timer()
         if (Date.now() > deadline) { failure = '登录超时（15 分钟）'; break }
         if (proc.status !== 'running') { failure = '登录进程意外退出'; break }
-        if (timer === undefined) { failure = 'timer 服务不可用，无法继续轮询登录进程'; break }
+        if (timer === undefined) { failure = 'DSH 计时服务不可用'; break }
         try {
           await timer.timeout(1000)
         } catch {
@@ -353,12 +308,19 @@ class OpenAISubscriptionController extends TypertRemoteService {
     if (failure !== null) {
       try { proc.kill() } catch {}
       await proc.done
-      let hint = ''
-      if (/404|not enabled|device/i.test(failure)) hint = ' 若你的账号未开启设备码登录，请在 ChatGPT 安全设置中开启后再试。'
-      notify({ message: '登录失败：' + failure + hint })
-      throw new Error('openai subscription login failed: ' + failure)
+      const knownFailure = failure === '登录超时（15 分钟）'
+        || failure === '登录进程意外退出'
+        || failure === 'DSH 计时服务不可用'
+        || failure === '登录轮询已停止'
+        || failure === '登录模块返回了无效的授权凭证'
+      const summary = knownFailure ? failure : 'OpenAI 登录请求未完成'
+      const hint = /404|not enabled/i.test(failure)
+        ? ' 请在 ChatGPT 安全设置中启用设备码授权后重试。'
+        : ' 请重试。'
+      notify({ message: summary + '。' + hint })
+      throw new Error('OpenAI authorization failed')
     }
-    if (credential === null) throw new Error('openai subscription login ended without a credential')
+    if (credential === null) throw new Error('OpenAI authorization ended without credentials')
     if (proc.status === 'running') proc.kill()
     await proc.done
     if (control.aborted()) return null
@@ -385,11 +347,10 @@ class OpenAISubscriptionController extends TypertRemoteService {
     if (control.aborted()) return null
     if (!(await this.mirrorToPiAi(granted, undefined, control.signal))) {
       if (control.aborted()) return null
-      notify({ message: '授权凭证已取得，但写入模型适配器失败，请重试。' })
-      throw new Error('openai subscription credential mirror failed')
+      notify({ message: '授权已完成，但模型凭证保存失败，请重试。' })
+      throw new Error('Provider credential write failed')
     }
     if (control.aborted()) return null
-    notify({ message: 'OpenAI 订阅授权成功，凭证已保存。' })
     if (await this.ensurePiRoute()) await this.markPiRouteManaged()
     return granted
   }
@@ -397,14 +358,14 @@ class OpenAISubscriptionController extends TypertRemoteService {
   private async runRefresh(control: AbortControl, notify: Notify): Promise<OAuthCredential | null> {
     const credentials = this.credentials()
     if (credentials === undefined) {
-      notify({ message: 'credentials 服务不可用，无法读取或写入授权记录。' })
-      throw new Error('openai subscription credentials service unavailable')
+      notify({ message: 'DSH 凭证服务不可用，请重启后重试。' })
+      throw new Error('DSH credential service unavailable')
     }
     const current = await credentials.readRecord(KEY)
     const adapterRecord = await credentials.readRecord(PI_AI_RECORD)
     if ((current === undefined || current.kind !== 'grant') && (adapterRecord === undefined || adapterRecord.kind !== 'grant')) {
-      notify({ message: '还没有 OpenAI 订阅授权记录，请先使用“设备码登录”。' })
-      throw new Error('no openai subscription record to refresh')
+      notify({ message: '尚未登录 ChatGPT 账号，请先完成设备授权。' })
+      throw new Error('ChatGPT authorization not found')
     }
     const payload: Record<string, unknown> = current?.kind === 'grant' && current.payload && typeof current.payload === 'object'
       ? current.payload as Record<string, unknown>
@@ -412,12 +373,11 @@ class OpenAISubscriptionController extends TypertRemoteService {
     const adapterPayload: Record<string, unknown> = adapterRecord?.kind === 'grant' && adapterRecord.payload && typeof adapterRecord.payload === 'object'
       ? adapterRecord.payload as Record<string, unknown>
       : {}
-    // pi-ai may rotate its refresh token during model requests. Prefer that
-    // adapter-facing record so a manual refresh never reuses the stale mirror.
+    // Prefer the provider's token because it may rotate during model requests.
     const secretPayload = typeof adapterPayload.refresh === 'string' && adapterPayload.refresh ? adapterPayload : payload
     if (typeof secretPayload.refresh !== 'string' || !secretPayload.refresh) {
-      notify({ message: '现有授权记录没有 refresh token，无法刷新，请重新登录。' })
-      throw new Error('openai subscription record has no refresh token')
+      notify({ message: '当前授权无法刷新，请退出后重新登录。' })
+      throw new Error('ChatGPT authorization cannot be refreshed')
     }
     const expectedMainRefresh = typeof payload.refresh === 'string' ? payload.refresh : null
     const expectedAdapterRefresh = secretPayload.refresh
@@ -425,8 +385,8 @@ class OpenAISubscriptionController extends TypertRemoteService {
     const modulePath = await this.locateAuthModule()
     const shell = this.shell()
     if (!modulePath || shell === undefined) {
-      notify({ message: '未找到 @earendil-works/pi-ai 的 OpenAI 登录模块。' })
-      throw new Error('openai subscription auth module not found')
+      notify({ message: '当前 DSH 环境缺少 OpenAI 登录组件，请更新 DSH 后重试。' })
+      throw new Error('OpenAI login component unavailable')
     }
     const previous: Partial<OAuthCredential> = {}
     if (typeof secretPayload.access === 'string' && secretPayload.access) previous.access = secretPayload.access
@@ -434,14 +394,13 @@ class OpenAISubscriptionController extends TypertRemoteService {
     if (typeof secretPayload.expires === 'number' && Number.isFinite(secretPayload.expires) && secretPayload.expires > 0) previous.expires = secretPayload.expires
     if (typeof secretPayload.accountId === 'string' && secretPayload.accountId) previous.accountId = secretPayload.accountId
 
-    notify({ message: '正在刷新 OpenAI 订阅授权…' })
+    notify({ message: '正在刷新 ChatGPT 订阅授权…' })
     const spec = shell.resolve({
       command: 'node --input-type=module --eval ' + this.shq(DRIVER_REFRESH) + ' ' + this.shq(modulePath),
       timeoutMs: 120000,
       stdoutMaxBytes: 65536,
       signal: control.signal,
-      // Keep tokens out of the child environment/process listing. The static
-      // driver is passed through argv; the credential itself travels on stdin.
+      // Keep credentials out of the child environment and process listing.
       stdin: JSON.stringify(previous),
     })
     const result: ShellRunResult = await shell.run(spec)
@@ -457,27 +416,26 @@ class OpenAISubscriptionController extends TypertRemoteService {
       }
     }
     if (!msg || msg.type !== 'result' || !msg.credential || typeof msg.credential !== 'object') {
-      const detail = msg && msg.type === 'error' && typeof msg.message === 'string' ? msg.message : ((result.stderr.text || '').trim() || '刷新失败')
-      notify({ message: '刷新失败：' + String(detail).slice(0, 300) })
-      throw new Error('openai subscription refresh failed: ' + String(detail).slice(0, 300))
+      notify({ message: '刷新失败，请检查网络后重试；若问题持续，请退出后重新登录。' })
+      throw new Error('OpenAI authorization refresh failed')
     }
     const next = normalizeOAuthCredential(msg.credential, previous)
     if (next === null) {
-      notify({ message: '刷新失败：登录模块返回了无效的授权凭证' })
-      throw new Error('openai subscription refresh returned an invalid credential')
+      notify({ message: '刷新失败：登录服务返回了无效响应。' })
+      throw new Error('Invalid authorization response')
     }
     if (!(await this.mirrorToPiAi(next, { refresh: expectedAdapterRefresh, requireExisting: adapterRecordRequired }, control.signal))) {
       notify({ message: '刷新期间授权记录已变化，已保留较新的凭证。' })
-      throw new Error('openai subscription credential changed during refresh')
+      throw new Error('Provider authorization changed during refresh')
     }
     await credentials.modifyRecord(KEY, async (latest) => {
       if (control.aborted()) return undefined
-      if (latest !== undefined && latest.kind !== 'grant') throw new Error('openai subscription record changed kind during refresh')
+      if (latest !== undefined && latest.kind !== 'grant') throw new Error('Plugin authorization changed during refresh')
       const latestPayload = latest?.kind === 'grant' && latest.payload && typeof latest.payload === 'object'
         ? latest.payload as Record<string, unknown>
         : {}
       const latestRefresh = typeof latestPayload.refresh === 'string' ? latestPayload.refresh : null
-      if (latestRefresh !== expectedMainRefresh) throw new Error('openai subscription record changed during refresh')
+      if (latestRefresh !== expectedMainRefresh) throw new Error('Plugin authorization changed during refresh')
       return {
         kind: 'grant' as const,
         payload: {
@@ -494,18 +452,11 @@ class OpenAISubscriptionController extends TypertRemoteService {
       }
     })
     if (control.aborted()) return null
-    notify({ message: 'OpenAI 订阅授权已刷新。' })
     if (await this.ensurePiRoute()) await this.markPiRouteManaged()
     return next
   }
 
-  /**
-   * Mirror the subscription grant into the record the DSH pi-ai LLM adapter
-   * resolves for `openai-codex`, in the adapter's own credential shape
-   * (`{ type: 'oauth', access, refresh, expires, accountId }` — a grant payload
-   * the adapter passes through verbatim). Callers treat a failed write as a
-   * failed authorization rather than reporting success with an unsigned route.
-   */
+  /** Store the credential used by the `openai-codex` provider. */
   private async mirrorToPiAi(
     credential: OAuthCredential,
     expected?: { refresh: string; requireExisting: boolean },
@@ -522,11 +473,11 @@ class OpenAISubscriptionController extends TypertRemoteService {
         if (signal?.aborted) return undefined
         if (expected !== undefined) {
           if (expected.requireExisting && (current === undefined || current.kind !== 'grant')) {
-            throw new Error('adapter credential was removed during refresh')
+            throw new Error('Provider authorization was removed during refresh')
           }
           if (current !== undefined && current.kind === 'grant') {
             const currentPayload = current.payload && typeof current.payload === 'object' ? current.payload as Record<string, unknown> : {}
-            if (currentPayload.refresh !== expected.refresh) throw new Error('adapter credential changed during refresh')
+            if (currentPayload.refresh !== expected.refresh) throw new Error('Provider authorization changed during refresh')
           }
         }
         return { kind: 'grant', payload }
@@ -538,13 +489,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
     }
   }
 
-  /**
-   * Silently enable the DSH pi-ai adapter's `openai-codex` route, so the GPT
-   * catalog models appear in the model picker without the user editing
-   * settings by hand. Path-addressed `mutate` (`providers/openai-codex`,
-   * namespace `llm-pi-ai`, hot-reloaded) leaves every other provider — and any
-   * already-configured non-bare `openai-codex` profile — untouched.
-   */
+  /** Enable the default provider without replacing user configuration. */
   private async ensurePiRoute(): Promise<boolean> {
     const settings = this.ctx.get('settings') as SettingsProvider | undefined
     if (settings === undefined || typeof settings.mutate !== 'function') return false
@@ -566,7 +511,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
     }
   }
 
-  /** Remember that the currently bare route was created by this plugin. */
+  /** Mark the default provider as plugin-managed. */
   private async markPiRouteManaged(): Promise<void> {
     const credentials = this.credentials()
     if (credentials === undefined) return
@@ -581,12 +526,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
     }
   }
 
-  /**
-   * On logout, withdraw the bare default route this plugin added — but never
-   * a profile the user configured themselves (any non-empty entry). Deleted
-   * with the credentials so a logged-out state does not leave GPT models
-   * listed that can no longer resolve a credential.
-   */
+  /** Remove only the unchanged default provider created by this plugin. */
   private async removePiRouteIfBare(): Promise<void> {
     const settings = this.ctx.get('settings') as SettingsProvider | undefined
     if (settings === undefined || typeof settings.mutate !== 'function') return
@@ -629,9 +569,9 @@ class OpenAISubscriptionController extends TypertRemoteService {
         else if (method === 'device_code') credential = await this.runDevice(control, notify)
         else throw new Error('未知的登录方式：' + method)
         state.outcome = credential === null ? 'cancelled' : 'authorized'
-      } catch (error) {
+      } catch {
         state.outcome = controller.signal.aborted ? 'cancelled' : 'failed'
-        state.error = controller.signal.aborted ? null : errorMessage(error)
+        state.error = controller.signal.aborted ? null : '授权失败，请根据提示重试。'
       } finally {
         state.done = true
         const timer = this.timer()
@@ -656,10 +596,10 @@ class OpenAISubscriptionController extends TypertRemoteService {
     try {
       authorization.registerFlow({
         key: KEY,
-        label: 'OpenAI 订阅账号（ChatGPT Plus / Pro / Team）',
+        label: 'ChatGPT 订阅账号',
         methods: [
-          { id: 'device_code', label: '设备码登录（ChatGPT 订阅账号）' },
-          { id: 'refresh', label: '刷新已有授权（Refresh）' },
+          { id: 'device_code', label: '使用设备码登录' },
+          { id: 'refresh', label: '刷新授权' },
         ],
         run: async (session) => {
           const notify: Notify = (notice) => session.notify(notice)
@@ -726,16 +666,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
     return { ok: true }
   }
 
-  /**
-   * Log out: abort any in-flight authorization (so a still-running driver
-   * subprocess cannot re-write the grant after deletion) and remove the stored
-   * credential record, including the pi-ai mirror, so the LLM seam loses the
-   * subscription credential with the same click. The bare `openai-codex`
-   * route this plugin enabled is withdrawn as well (never a user-configured
-   * profile), so a logged-out state does not list models that cannot resolve
-   * a credential. Deleting an absent record is a no-op; afterwards `status`
-   * reports `configured: false` again.
-   */
+  /** Cancel active authorization and remove plugin-managed credentials and settings. */
   async logout(): Promise<{ ok: true }> {
     const pending = this.pendingBridge
     if (pending !== null) {
@@ -746,14 +677,13 @@ class OpenAISubscriptionController extends TypertRemoteService {
     const authorization = this.authorization()
     if (authorization !== undefined) { try { authorization.cancel(KEY) } catch {} }
     const credentials = this.credentials()
-    if (credentials === undefined) throw new Error('openai subscription credentials service unavailable')
+    if (credentials === undefined) throw new Error('DSH credential service unavailable')
     const record = await credentials.readRecord(KEY)
     const payload = record?.kind === 'grant' && record.payload && typeof record.payload === 'object'
       ? record.payload as Record<string, unknown>
       : {}
     const managedPiRoute = payload.managedPiRoute === true
-    // The adapter-facing record is the security-critical copy: never report a
-    // successful logout while it could still authorize model requests.
+    // Delete the provider credential before reporting a successful logout.
     await credentials.deleteRecord(PI_AI_RECORD)
     await credentials.deleteRecord(KEY)
     if (managedPiRoute) await this.removePiRouteIfBare()

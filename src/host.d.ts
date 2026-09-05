@@ -63,30 +63,13 @@ declare class OpenAISubscriptionController extends TypertRemoteService {
     private locateAuthModule;
     private runDevice;
     private runRefresh;
-    /**
-     * Mirror the subscription grant into the record the DSH pi-ai LLM adapter
-     * resolves for `openai-codex`, in the adapter's own credential shape
-     * (`{ type: 'oauth', access, refresh, expires, accountId }` — a grant payload
-     * the adapter passes through verbatim). Callers treat a failed write as a
-     * failed authorization rather than reporting success with an unsigned route.
-     */
+    /** Store the credential used by the `openai-codex` provider. */
     private mirrorToPiAi;
-    /**
-     * Silently enable the DSH pi-ai adapter's `openai-codex` route, so the GPT
-     * catalog models appear in the model picker without the user editing
-     * settings by hand. Path-addressed `mutate` (`providers/openai-codex`,
-     * namespace `llm-pi-ai`, hot-reloaded) leaves every other provider — and any
-     * already-configured non-bare `openai-codex` profile — untouched.
-     */
+    /** Enable the default provider without replacing user configuration. */
     private ensurePiRoute;
-    /** Remember that the currently bare route was created by this plugin. */
+    /** Mark the default provider as plugin-managed. */
     private markPiRouteManaged;
-    /**
-     * On logout, withdraw the bare default route this plugin added — but never
-     * a profile the user configured themselves (any non-empty entry). Deleted
-     * with the credentials so a logged-out state does not leave GPT models
-     * listed that can no longer resolve a credential.
-     */
+    /** Remove only the unchanged default provider created by this plugin. */
     private removePiRouteIfBare;
     private beginLogin;
     private registerAuthorizationFlow;
@@ -97,16 +80,7 @@ declare class OpenAISubscriptionController extends TypertRemoteService {
     cancel(): Promise<{
         ok: true;
     }>;
-    /**
-     * Log out: abort any in-flight authorization (so a still-running driver
-     * subprocess cannot re-write the grant after deletion) and remove the stored
-     * credential record, including the pi-ai mirror, so the LLM seam loses the
-     * subscription credential with the same click. The bare `openai-codex`
-     * route this plugin enabled is withdrawn as well (never a user-configured
-     * profile), so a logged-out state does not list models that cannot resolve
-     * a credential. Deleting an absent record is a no-op; afterwards `status`
-     * reports `configured: false` again.
-     */
+    /** Cancel active authorization and remove plugin-managed credentials and settings. */
     logout(): Promise<{
         ok: true;
     }>;

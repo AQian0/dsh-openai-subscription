@@ -1,23 +1,6 @@
 "use strict";
-// dsh-openai-subscription — Client half (built web bundle, TypeScript source).
-// OpenAI (ChatGPT Plus/Pro/Team) subscription sign-in for DeepSeek Harness.
-//
-// This is the `dsh.client` bundle the web module table consumes: it registers
-// itself with `window.__ModuleLoader__.load` and exports `apply` / `inject`
-// for the vendored cordis Loader. It renders the "OpenAI 订阅登录" settings
-// section and talks to the Host half over the Typert Remote wire through the
-// `connection` service (`connection.rpc.call('/api', 'openaiSubscription/*',
-// { args }, signal)`) — no dynamic-plugin builtins involved.
-//
-// The file is authored in TypeScript and compiled in place (tsc emits
-// client.js next to it). It is deliberately a *global script* — no top-level
-// import/export — so the emitted bundle keeps the exact shape the browser
-// module table loads. React is typed structurally below instead of depending
-// on @types/react: the module arrives through the loader-provided `require`
-// at runtime.
-//
-// CSS is injected once via a `<style data-plugin-css>` tag, the same pattern
-// shipped client bundles use.
+// Web settings UI for ChatGPT subscription authorization.
+// This remains a global script for the DSH client module loader.
 //#endregion
 /** Stringify an unknown thrown value for display. */
 function messageOf(error) {
@@ -97,8 +80,7 @@ window.__ModuleLoader__.load({
                 request.then((result) => {
                     finish(() => {
                         if (!result || !result.ok) {
-                            const message = result && result.error && typeof result.error.message === 'string' ? result.error.message : '远程调用失败';
-                            reject(new Error(message));
+                            reject(new Error('DSH 服务请求失败，请重试'));
                             return;
                         }
                         if (result.value === undefined) {
@@ -119,8 +101,6 @@ window.__ModuleLoader__.load({
             const status = { configured: raw.configured, ready: raw.ready };
             if (typeof raw.accountId === 'string')
                 status.accountId = raw.accountId;
-            if (typeof raw.loginMethod === 'string')
-                status.loginMethod = raw.loginMethod;
             if (typeof raw.expires === 'number' && Number.isFinite(raw.expires) && raw.expires > 0)
                 status.expires = raw.expires;
             return status;
@@ -210,7 +190,7 @@ window.__ModuleLoader__.load({
                 if (phase !== 'pending' && phase !== 'cancelling')
                     return;
                 if (timer === undefined || typeof timer.interval !== 'function') {
-                    setError('timer 服务不可用，无法轮询授权状态');
+                    setError('授权状态服务不可用，请重启 DSH 后重试。');
                     setPhase('done');
                     return;
                 }
@@ -274,7 +254,7 @@ window.__ModuleLoader__.load({
                 if (busy || actionLock.current)
                     return;
                 if (timer === undefined || typeof timer.interval !== 'function') {
-                    setError('timer 服务不可用，无法启动授权流程');
+                    setError('授权状态服务不可用，请重启 DSH 后重试。');
                     setPhase('done');
                     return;
                 }
@@ -330,14 +310,14 @@ window.__ModuleLoader__.load({
                     actionLock.current = false;
                 });
             };
-            return el('div', { className: 'oasub-wrap' }, el('div', { className: 'oasub-title', role: 'heading', 'aria-level': 2 }, 'OpenAI 订阅登录'), el('div', { className: 'oasub-desc' }, '用 OpenAI（ChatGPT Plus / Pro / Team）订阅账号登录，走官方 OAuth 设备码流程（复用 DSH 内置 @earendil-works/pi-ai 的登录实现）。访问令牌与刷新令牌只保存在本机 DSH 凭证库。'), !ready ? el('div', { className: 'oasub-err', role: 'alert' }, '未找到 DSH 的 pi 依赖（@earendil-works/pi-ai），无法使用订阅登录。') : null, info === null
-                ? el('div', { className: 'oasub-card', role: 'status', 'aria-live': 'polite' }, statusError || '正在读取登录状态…')
-                : el('div', { className: 'oasub-card' }, configured ? el('div', { className: 'oasub-ok' }, '已登录 ChatGPT 订阅账号') : el('div', { className: 'oasub-desc' }, '尚未登录 OpenAI 订阅账号'), configured && info.accountId ? el('div', { className: 'oasub-desc' }, '账号：' + info.accountId) : null, configured && info.expires ? el('div', { className: 'oasub-desc' }, '访问令牌到期：' + new Date(info.expires).toLocaleString()) : null, configured && info.loginMethod ? el('div', { className: 'oasub-desc' }, '登录方式：' + info.loginMethod) : null), notices.map((notice, index) => {
+            return el('div', { className: 'oasub-wrap' }, el('div', { className: 'oasub-title', role: 'heading', 'aria-level': 2 }, 'ChatGPT 订阅登录'), el('div', { className: 'oasub-desc' }, '使用有 Codex 权限的 ChatGPT 账号授权 DSH。登录后，插件会尝试自动启用受支持的 GPT 模型，凭证保存在本机。'), !ready ? el('div', { className: 'oasub-err', role: 'alert' }, '当前 DSH 环境缺少 OpenAI 登录组件，请更新 DSH 后重试。') : null, info === null
+                ? (statusError ? null : el('div', { className: 'oasub-card', role: 'status', 'aria-live': 'polite' }, '正在读取登录状态…'))
+                : el('div', { className: 'oasub-card' }, configured ? el('div', { className: 'oasub-ok' }, '已登录 ChatGPT 订阅账号') : el('div', { className: 'oasub-desc' }, '尚未登录 ChatGPT 订阅账号'), configured && info.accountId ? el('div', { className: 'oasub-desc' }, '账号：' + info.accountId) : null, configured && info.expires ? el('div', { className: 'oasub-desc' }, '授权有效期至：' + new Date(info.expires).toLocaleString()) : null), notices.map((notice, index) => {
                 const url = safeHttpUrl(notice.url);
                 return el('div', { key: 'n' + index, className: 'oasub-card', role: 'status', 'aria-live': 'polite' }, notice.message ? el('div', { className: 'oasub-desc' }, notice.message) : null, notice.code ? el('div', { className: 'oasub-row' }, el('code', { className: 'oasub-code' }, notice.code), url ? el('a', { className: 'oasub-link', href: url, target: '_blank', rel: 'noreferrer' }, '打开登录页（新窗口）') : null) : null);
-            }), statusError ? el('div', { className: 'oasub-row' }, el('div', { className: 'oasub-err', role: 'alert' }, statusError), el('button', { type: 'button', className: 'oasub-btn', disabled: busy, onClick: () => setStatusRetry((value) => value + 1) }, '重试')) : null, error ? el('div', { className: 'oasub-err', role: 'alert' }, error) : null, phase === 'done' && result === 'authorized' ? el('div', { className: 'oasub-ok', role: 'status', 'aria-live': 'polite' }, '授权成功，凭证已保存。') : null, phase === 'done' && result === 'cancelled' ? el('div', { className: 'oasub-desc', role: 'status', 'aria-live': 'polite' }, '授权已取消。') : null, phase === 'done' && result === 'logged-out' ? el('div', { className: 'oasub-ok', role: 'status', 'aria-live': 'polite' }, '已退出 OpenAI 订阅账号。') : null, info === null ? null : el('div', { className: 'oasub-row' }, configured
-                ? el('button', { type: 'button', className: 'oasub-btn', disabled: busy || !ready, onClick: () => start('refresh') }, authBusy ? '刷新中…' : '刷新授权')
-                : el('button', { type: 'button', className: 'oasub-btn primary', disabled: busy || !ready, onClick: () => start('device_code') }, authBusy ? '登录中…' : '使用 OpenAI 账号登录'), configured ? el('button', { type: 'button', className: 'oasub-btn', disabled: busy, onClick: logout }, phase === 'logging-out' ? '退出中…' : '退出登录') : null, phase === 'pending' || phase === 'cancelling'
+            }), statusError ? el('div', { className: 'oasub-row' }, el('div', { className: 'oasub-err', role: 'alert' }, statusError), el('button', { type: 'button', className: 'oasub-btn', disabled: busy, onClick: () => setStatusRetry((value) => value + 1) }, '重试')) : null, error ? el('div', { className: 'oasub-err', role: 'alert' }, error) : null, phase === 'done' && result === 'authorized' ? el('div', { className: 'oasub-ok', role: 'status', 'aria-live': 'polite' }, '授权成功，凭证已保存。') : null, phase === 'done' && result === 'cancelled' ? el('div', { className: 'oasub-desc', role: 'status', 'aria-live': 'polite' }, '授权已取消。') : null, phase === 'done' && result === 'logged-out' ? el('div', { className: 'oasub-ok', role: 'status', 'aria-live': 'polite' }, '已退出 ChatGPT 订阅账号。') : null, info === null ? null : el('div', { className: 'oasub-row' }, configured
+                ? el('button', { type: 'button', className: 'oasub-btn', disabled: busy || !ready, onClick: () => start('refresh') }, authBusy && phase !== 'cancelling' ? '刷新中…' : '刷新授权')
+                : el('button', { type: 'button', className: 'oasub-btn primary', disabled: busy || !ready, onClick: () => start('device_code') }, authBusy && phase !== 'cancelling' ? '登录中…' : '使用 ChatGPT 账号登录'), configured ? el('button', { type: 'button', className: 'oasub-btn', disabled: busy, onClick: logout }, phase === 'logging-out' ? '退出中…' : '退出登录') : null, phase === 'pending' || phase === 'cancelling'
                 ? el('button', { type: 'button', className: 'oasub-btn', disabled: phase === 'cancelling', onClick: cancel }, phase === 'cancelling' ? '取消中…' : '取消')
                 : null));
         }
@@ -346,7 +326,7 @@ window.__ModuleLoader__.load({
             if (slots === undefined)
                 return;
             ensureCss();
-            slots.inject('settings.section', () => slots.register({ name: 'settings.section', id: 'openai-subscription', order: 25, label: 'OpenAI 订阅登录' }, () => React.createElement(Section, { connection: ctx.connection, timer: ctx.timer })));
+            slots.inject('settings.section', () => slots.register({ name: 'settings.section', id: 'openai-subscription', order: 25, label: 'ChatGPT 订阅登录' }, () => React.createElement(Section, { connection: ctx.connection, timer: ctx.timer })));
         }
         exports.apply = apply;
         exports.inject = ['connection', 'timer'];

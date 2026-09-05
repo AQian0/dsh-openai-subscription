@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import { normalizeOAuthCredential } from '../src/oauth.js'
 
-test('rejects malformed credentials and credentials without an access token', () => {
+test('rejects malformed credentials or an invalid access token', () => {
   assert.equal(normalizeOAuthCredential(null), null)
   assert.equal(normalizeOAuthCredential([]), null)
   assert.equal(normalizeOAuthCredential({}), null)
@@ -11,7 +11,7 @@ test('rejects malformed credentials and credentials without an access token', ()
   assert.equal(normalizeOAuthCredential({ access: 42 }), null)
 })
 
-test('keeps only validated OAuth fields', () => {
+test('returns supported OAuth fields and drops unknown properties', () => {
   assert.deepEqual(
     normalizeOAuthCredential({
       access: 'access-token',
@@ -29,7 +29,7 @@ test('keeps only validated OAuth fields', () => {
   )
 })
 
-test('inherits stable fields omitted by a refresh response', () => {
+test('uses fallbacks for missing or invalid optional fields', () => {
   assert.deepEqual(
     normalizeOAuthCredential(
       { access: 'new-access', expires: Number.NaN },
@@ -49,7 +49,7 @@ test('inherits stable fields omitted by a refresh response', () => {
   )
 })
 
-test('prefers valid fields returned by refresh over fallback values', () => {
+test('prefers refreshed optional fields over fallbacks', () => {
   assert.deepEqual(
     normalizeOAuthCredential(
       {
