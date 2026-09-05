@@ -75,6 +75,7 @@ Restart the Web profile and refresh the page afterward.
 
 - **The settings entry is missing:** confirm the plugin is installed in the `web` profile with `dsh plugin --profile web why dsh-openai-subscription`, then restart DSH and refresh the page.
 - **Authorization cannot start:** confirm `node --version` meets the requirement and check access to the OpenAI authentication service.
+- **Sign-in component unavailable:** the sign-in module is taken first from the `llm-pi-ai` adapter dependency bundled with the running DSH (no separate `pi` CLI install is needed); npm/nvm/bun-managed global `pi` installs are only a fallback. If the message persists, restart DSH and try again.
 - **The device code is rejected:** enable device-code authorization in ChatGPT security settings and start a new connection.
 - **Models need syncing:** select **Sync models**. If an explicit list already exists, review the confirmation and continue; local edits are preserved.
 - **Model sync fails:** existing settings remain unchanged. Check access to `chatgpt.com` and authorization status, then retry; refresh authorization first if needed.

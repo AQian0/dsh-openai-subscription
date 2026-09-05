@@ -75,6 +75,7 @@ dsh plugin --profile web remove dsh-openai-subscription
 
 - **设置中没有入口：** 使用 `dsh plugin --profile web why dsh-openai-subscription` 确认插件已安装到 `web` profile，然后重启 DSH 并刷新页面。
 - **无法开始授权：** 确认 `node --version` 满足要求，并检查 OpenAI 登录服务是否可访问。
+- **提示登录组件不可用：** 登录组件优先取自当前 DSH 自带的 `llm-pi-ai` 适配器依赖（无需单独安装 `pi` CLI），找不到时才会回退到 npm/nvm/bun 全局安装的 `pi` 所携带的副本。若仍提示不可用，请重启 DSH 后重试。
 - **设备码被拒绝：** 在 ChatGPT 安全设置中启用设备码授权，然后重新连接。
 - **模型需要同步：** 点击 **同步模型**。若已有显式模型列表，请阅读确认提示后继续；插件会保留本地编辑。
 - **模型同步失败：** 现有设置会保持不变。检查 `chatgpt.com` 的网络访问和授权状态，稍后重试；必要时先刷新授权。
