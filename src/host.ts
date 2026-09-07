@@ -811,7 +811,9 @@ class OpenAISubscriptionController extends TypertRemoteService {
     }
   }
 
-  async authorize(method: unknown = 'device_code'): Promise<AuthorizeResult> {
+  // The SRC gateway requires bare parameter names; defaults belong in the body.
+  async authorize(method?: unknown): Promise<AuthorizeResult> {
+    if (method === undefined) method = 'device_code'
     return this.beginLogin(typeof method === 'string' ? method : '')
   }
 
@@ -834,7 +836,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
     return { ok: true }
   }
 
-  async syncModels(confirmed: unknown = false): Promise<ModelSyncResult> {
+  async syncModels(confirmed?: unknown): Promise<ModelSyncResult> {
     if (this.disconnecting != null || (this.pendingBridge !== null && !this.pendingBridge.done)) throw new SubscriptionError('busy')
     try {
       return await this.synchronizeModels(undefined, confirmed === true)

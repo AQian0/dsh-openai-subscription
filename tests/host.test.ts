@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { posix } from 'node:path'
 import test from 'node:test'
+import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol'
 
 import OpenAISubscriptionController, { authModuleCandidates as platformCandidates } from '../src/host.js'
 import { SubscriptionError } from '../src/errors.js'
@@ -64,6 +65,19 @@ function controllerWith(services: Record<string, unknown>): ControllerHarness {
   controller.pendingBridge = null
   return controller
 }
+
+test('source-mode RPC methods expose bare wire parameter names without defaults', () => {
+  const expected: Record<string, string> = {
+    status: '', authorize: 'method', poll: '', cancel: '', syncModels: 'confirmed', logout: '',
+  }
+  const methods = remoteMethods(controllerWith({})).map(({ method }) => method)
+  assert.deepEqual(methods, Object.keys(expected))
+  for (const method of methods) {
+    const source = Function.prototype.toString.call(Reflect.get(OpenAISubscriptionController.prototype, method))
+    const parameters = source.slice(source.indexOf('(') + 1, source.indexOf(')')).trim()
+    assert.equal(parameters, expected[method], `${method} must be accepted by the DSH SRC gateway`)
+  }
+})
 
 test('status returns semantic connection and model-sync facts without account metadata', async () => {
   const managedModels = [{ id: 'gpt-live', name: 'GPT Live' }]
@@ -685,6 +699,10 @@ test('authorization errors keep stable codes and clear completed device secrets'
   assert.deepEqual(await controller.poll(), first)
   assert.equal((await controller.authorize('unexpected')).started, false)
   assert.equal((await controller.authorize({})).started, false)
+  assert.equal((await controller.authorize(null)).started, false)
+  assert.deepEqual(await controller.authorize(), { started: true })
+  await controller.pendingBridge?.task
+  assert.deepEqual(await controller.poll(), first)
 })
 
 test('pending flow snapshots survive polling and reject racing authorizations or sync', async () => {
@@ -739,6 +757,7 @@ test('explicit model adoption requires confirmed=true and reports partial metada
   })
   controller.modelDiscovery = async () => ({ models: [{ id: 'remote' }], seenIds: ['remote'] })
   await assert.rejects(controller.syncModels(), /models-confirmation-required/)
+  await assert.rejects(controller.syncModels('true'), /models-confirmation-required/)
   assert.equal(mutated, false)
   assert.deepEqual(await controller.syncModels(true), { synced: true, count: 2, warningCode: 'ownership-save-failed' })
   assert.equal(mutated, true)
