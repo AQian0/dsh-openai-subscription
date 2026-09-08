@@ -7,8 +7,8 @@
  *   node scripts/patch-dsh-settings-icons.mjs --root /path/to/dsh --apply
  *   node scripts/patch-dsh-settings-icons.mjs --root /path/to/dsh --restore
  *
- * Requires @babel/parser and esbuild resolvable from ROOT (already present in
- * the tested installation). This is an exact-version AND SHA-256 guarded patch,
+ * Requires @babel/parser and esbuild: resolve each from ROOT first, then this
+ * patch package's own dependencies. This is an exact-version AND SHA-256 guarded patch,
  * NOT a general updater: an upstream update must be reviewed before extending
  * the allowlist. No network, credential files, process discovery, or restarts.
  *
@@ -156,9 +156,21 @@ function imports(source, parse) {
   return values.sort()
 }
 export function loadToolchain(root) {
-  const require = createRequire(join(root, 'package.json'))
-  try { return { parse: require('@babel/parser').parse, transform: require('esbuild').transform } }
-  catch (error) { throw new Error('Build requires @babel/parser and esbuild resolvable from --root; no files changed', { cause: error }) }
+  const resolvers = [createRequire(join(root, 'package.json')), createRequire(new URL('../package.json', import.meta.url))]
+  const load = (name) => {
+    for (const require of resolvers) {
+      let path
+      try { path = require.resolve(name) }
+      catch (error) {
+        if (error.code !== 'MODULE_NOT_FOUND') throw error
+        continue
+      }
+      // Only missing resolution falls back: do not hide broken installed tools.
+      return require(path)
+    }
+    throw new Error(`Build requires ${name} resolvable from --root or the patch package; install this package's development dependencies with pnpm install; no files changed`)
+  }
+  return { parse: load('@babel/parser').parse, transform: load('esbuild').transform }
 }
 function checkVersions(root) {
   for (const [name, version] of Object.entries(VERSIONS)) {

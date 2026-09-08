@@ -43,13 +43,29 @@ For a Bun global installation, that root is typically `~/.bun/install/global`.
 Confirm the actual installation location before applying.
 
 `--check` validates without writing. `--apply` is idempotent for the same patch.
-The script requires `@babel/parser` and `esbuild` resolvable from `ROOT`; both
-were already installed in the tested environment. It does not install tools,
-access credentials, change account settings, restart DSH, or launch a server.
-It is never invoked automatically by plugin installation.
+For each of `@babel/parser` and `esbuild`, the script resolves `ROOT` first, then
+its own package directory (not the invoking working directory). Only a missing
+module falls back; a broken installed tool is reported rather than hidden.
+These tools are development dependencies of this repository. If `--check`
+reports a missing tool, install them in a source checkout, **not the DSH host**:
 
-`--check` 只检查，`--apply` 才修改，重复执行不会叠加补丁。构建工具必须已存在于
-DSH 安装目录，脚本不会联网安装。它不读取凭证、不修改账号设置，也不重启服务。
+```sh
+# In a source checkout of dsh-openai-subscription:
+pnpm install --frozen-lockfile
+node scripts/patch-dsh-settings-icons.mjs --root /path/to/dsh --check
+```
+
+A production-only/plugin installation may omit development dependencies; run
+the script from the prepared source checkout instead. Dependency installation
+is a separate explicit action and can write to pnpm's store. The patch script
+itself never installs tools, accesses credentials, changes account settings,
+restarts DSH, or launches a server. Plugin installation never invokes it.
+
+`--check` 只检查，`--apply` 才修改，重复执行不会叠加补丁。构建工具逐个先从
+DSH 安装目录解析，缺少时再从脚本所属插件目录解析，不依赖当前工作目录；已存在
+但损坏的工具会报错。工具作为本仓库开发依赖安装，无需修改宿主的依赖清单。
+生产安装可能省略开发依赖，此时先在源码仓库显式运行 `pnpm install --frozen-lockfile`，
+再从该仓库执行脚本。脚本本身不会联网安装、读取凭证、修改账号设置或重启服务。
 
 Supported package versions (also guarded by exact SHA-256 file hashes):
 
@@ -80,15 +96,24 @@ minifier symbol names blindly or substitute a different Web server.
 渲染器外，还通过 AST 定位静态注册表并用 esbuild 重新生成 Web 产物。新文件
 采用内容哈希命名，保留原文件，最后切换 HTML 入口。
 
-Rebuild/reinstall this plugin's client bundle as well. The tested DSH client-HMR
-file poller notices modified built plugin bundles, but the **shell change always
-requires refreshing the existing DSH page**. If that poller is disabled, arrange
-a DSH restart yourself before refreshing. Editing TypeScript alone does not
-rebuild installed plugin bundles; no automatic source-watcher behavior is assumed.
+The installed plugin client must also contain its `icon: OpenAIIcon` registration;
+if it already does, no plugin rebuild is needed for this host-only patch.
+Otherwise rebuild/reinstall this plugin's client bundle as well. The tested DSH
+client-HMR file poller notices modified built plugin bundles, but the **shell
+change always requires refreshing the existing DSH page**. If that poller is
+disabled, arrange a DSH restart yourself before refreshing. Editing TypeScript
+alone does not rebuild installed plugin bundles. A DSH source checkout's
+`pnpm run dev:web` watcher and the host's client-HMR receiver are different:
+confirm the watcher before expecting source edits to rebuild automatically.
+This compiled global installation does not provide that source-checkout script;
+do not start a replacement Vite server to update an existing DSH GUI.
 
-插件自身也要重新构建并安装。当前测试环境的文件监听会拾取已构建插件的变化，
-但 **Web 壳层修改必须刷新现有页面**；没有监听时，还需自行安排重启 DSH。
-仅修改 TypeScript 源码不会更新已安装的 GUI，脚本也不会自动重启正在进行的会话。
+已安装的插件客户端也必须包含 `icon: OpenAIIcon` 注册；如果已有，修补宿主时
+无需重复构建插件，否则先构建并安装插件。当前测试环境的文件监听会拾取已构建
+插件的变化，但 **Web 壳层修改必须刷新现有页面**；没有监听时，还需自行安排
+重启 DSH。`pnpm run dev:web` 源码构建 watcher 不等于客户端 HMR 接收器，未确认
+watcher 时不能宣称源码修改会自动生效。本编译包安装根不提供源码 watcher 脚本，
+另起 Vite 服务也不会更新现有 GUI。脚本不会自动重启正在进行的会话。
 
 ## Backup and restore / 备份与还原
 

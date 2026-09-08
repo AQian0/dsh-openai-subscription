@@ -24,6 +24,56 @@ interface PatchAPI {
 }
 const patch = await import(pathToFileURL(resolve('scripts/patch-dsh-settings-icons.mjs')).href) as PatchAPI
 
+test('DSH patch resolves each build tool from ROOT first, then the patch package', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'dsh-icon-toolchain-'))
+  const hostRoot = join(directory, 'host')
+  const parserPath = join(hostRoot, 'node_modules/@babel/parser')
+  const esbuildPath = join(hostRoot, 'node_modules/esbuild')
+  try {
+    mkdirSync(parserPath, { recursive: true })
+    mkdirSync(esbuildPath, { recursive: true })
+    writeFileSync(join(parserPath, 'index.js'), 'exports.parse = () => "root-parser"')
+    writeFileSync(join(esbuildPath, 'index.js'), 'exports.transform = async () => "root-esbuild"')
+    const rootTools = patch.loadToolchain(hostRoot)
+    assert.equal(rootTools.parse('', { sourceType: 'module' }), 'root-parser')
+    assert.equal(await rootTools.transform('', {}), 'root-esbuild')
+    // Independent ROOTs cannot inherit one another's mock dependencies.
+    const fallbackRoot = join(directory, 'fallback')
+    const fallbackEsbuild = join(fallbackRoot, 'node_modules/esbuild')
+    mkdirSync(fallbackEsbuild, { recursive: true })
+    writeFileSync(join(fallbackEsbuild, 'index.js'), 'exports.transform = async () => "fallback-root-esbuild"')
+    const fallbackTools = patch.loadToolchain(fallbackRoot)
+    assert.equal((fallbackTools.parse('const icon = 1', { sourceType: 'module' }) as { type: string }).type, 'File')
+    assert.equal(await fallbackTools.transform('', {}), 'fallback-root-esbuild')
+    const packageTools = patch.loadToolchain(join(directory, 'no-host-tools'))
+    const result = await packageTools.transform('const icon = 1', { loader: 'js' }) as { code: string }
+    assert.match(result.code, /const icon = 1/)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('DSH patch reports missing tools without installing or creating backups', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'dsh-icon-missing-tools-'))
+  try {
+    const scriptPath = join(directory, 'scripts/patch-dsh-settings-icons.mjs')
+    mkdirSync(join(directory, 'scripts'))
+    writeFileSync(scriptPath, readFileSync(resolve('scripts/patch-dsh-settings-icons.mjs')))
+    const isolated = await import(pathToFileURL(scriptPath).href) as PatchAPI
+    assert.throws(() => isolated.loadToolchain(join(directory, 'host')), /@babel\/parser resolvable from --root or the patch package.*no files changed/)
+    assert.equal(existsSync(join(directory, 'host')), false)
+    assert.equal(existsSync(join(directory, 'node_modules')), false)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('DSH patch does not hide a broken ROOT tool with the package fallback', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'dsh-icon-broken-tool-'))
+  try {
+    const parserPath = join(directory, 'node_modules/@babel/parser')
+    mkdirSync(parserPath, { recursive: true })
+    writeFileSync(join(parserPath, 'index.js'), 'throw Object.assign(new Error("broken root parser"), {code: "MODULE_NOT_FOUND"})')
+    assert.throws(() => patch.loadToolchain(directory), /broken root parser/)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
 test('DSH patch anchors fail closed on missing, duplicate, or already-patched input', () => {
   assert.equal(patch.replaceOnce('before', 'before', 'after'), 'after')
   assert.throws(() => patch.replaceOnce('wrong', 'before', 'after'), /exactly one/)
@@ -148,10 +198,12 @@ test('guarded host patch applies idempotently, preserves originals, and restores
       mkdirSync(join(path, '..'), { recursive: true })
       writeFileSync(path, hostSource(key))
     }
-    // Only read-only build dependencies are linked, never mutable DSH packages.
+    // Only available read-only build dependencies are linked, never mutable DSH
+    // packages. Missing host tools use the patch package's normal fallback.
     mkdirSync(join(directory, 'node_modules/@babel'), { recursive: true })
     for (const name of ['esbuild', '@babel/parser']) {
-      symlinkSync(join(root, 'node_modules', name), join(directory, 'node_modules', name), process.platform === 'win32' ? 'junction' : 'dir')
+      const dependency = join(root, 'node_modules', name)
+      if (existsSync(dependency)) symlinkSync(dependency, join(directory, 'node_modules', name), process.platform === 'win32' ? 'junction' : 'dir')
     }
     const checked = await patch.run({ root: directory, action: 'check', backupDir }) as { status: string }
     assert.equal(checked.status, 'ready')
