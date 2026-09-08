@@ -53,7 +53,22 @@ Restart `dsh web`, then refresh the existing page. DSH registers the plugin auto
 4. Return to DSH after authorization completes; the plugin fetches and syncs models automatically.
 5. Select an available model from the DSH model picker.
 
-`llm-pi-ai` automatically renews refreshable OAuth credentials during model requests. **Refresh authorization** in this settings page is primarily a manual recovery action.
+The main area keeps **Sync models / Update models**: fetch the model list while preserving local configuration, without switching accounts. Expand **Connection management** for infrequent operations:
+
+- **Refresh authorization / Reconnect**: recover from authorization problems. `llm-pi-ai` automatically renews refreshable credentials during requests; routine manual refresh is unnecessary. Recovery is also shown directly for expired or unknown authorization.
+- **Reload status**: read local state only; does not renew authorization or sync models.
+- **Disconnect**: remove the local connection after confirmation; does not delete your ChatGPT account.
+
+### 1M and custom context windows
+
+Under **Model context**, select a model, choose **Use model default / 1M / Custom**, then **Save context**. 1M means `1,000,000` tokens for input and output combined, not a fixed request size or a higher output-token limit.
+
+- Only the selected model’s `llm-pi-ai.providers.openai-codex.models[].contextWindow` changes. Other models are not forced to 1M.
+- Catalog defaults and maximum windows are separate. The 1M option is disabled below a known 1M maximum, and custom values cannot exceed known maxima.
+- When no maximum is declared, an explicit override is allowed with a warning. Local configuration does not guarantee model/account capacity or unlock upstream access.
+- Later model syncs preserve this local edit. Choose **Use model default** and save to restore the latest synchronized default field.
+- Saving changes local settings only, without login or discovery. Concurrent edits produce a settings conflict; reload before saving again.
+- Older snapshots may lack default/maximum metadata; **Update models** fills in facts the catalog supplies. After upgrading, load both the new host and client plugin, restart DSH, and refresh the page.
 
 ### Status and recovery
 

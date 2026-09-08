@@ -14,11 +14,16 @@ import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { normalizeOAuthCredential, type OAuthCredential } from './oauth.js'
 import {
   discoverOpenAIModels,
+  describeModelContexts,
+  configureModelContext,
+  validateContextWindow,
   mergeModelCatalog,
   removeManagedModels,
   type DiscoveredModelCatalog,
   type ModelDiscoveryOptions,
   type ModelProfile,
+  type ModelContextInfo,
+  type ModelContextMetadata,
 } from './models.js'
 
 /** Plugin-owned authorization metadata. */
@@ -90,6 +95,17 @@ interface ModelSyncResult {
   warningCode?: 'ownership-save-failed'
 }
 
+/** Local-only context settings, guarded by the DSH settings revision. */
+interface ModelContextsResult {
+  revision: number
+  models: ModelContextInfo[]
+}
+
+interface BuiltinModel {
+  id: string
+  contextWindow?: number
+}
+
 type ModelDiscovery = (
   credential: { access: string; accountId?: string },
   options?: ModelDiscoveryOptions,
@@ -100,7 +116,7 @@ interface LlmModelCatalog {
     settingsNs: string,
     request: { provider?: string },
     signal?: AbortSignal,
-  ): Promise<readonly { id: string }[]>
+  ): Promise<readonly BuiltinModel[]>
 }
 
 /** `openaiSubscription/poll` reply. */
@@ -168,7 +184,7 @@ function settingsConflict(error: unknown): boolean {
 //#endregion
 
 /** Register source-mode remote methods without decorator syntax. */
-const REMOTE_METHODS = ['status', 'authorize', 'poll', 'cancel', 'syncModels', 'logout'] as const
+const REMOTE_METHODS = ['status', 'authorize', 'poll', 'cancel', 'syncModels', 'getModelContexts', 'setModelContext', 'logout'] as const
 
 /** Decorator context fields used by `Remote`. */
 interface MarkerContext {
@@ -208,6 +224,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
   private syncingModels: Promise<ModelSyncResult> | null = null
   private modelSyncController: AbortController | null = null
   private modelDiscovery: ModelDiscovery = discoverOpenAIModels
+  private configuringModel: Promise<{ saved: true }> | null = null
   private disconnecting: Promise<{ ok: true }> | null = null
 
   constructor(ctx: Context) {
@@ -216,7 +233,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
     ctx.effect(() => async () => {
       this.pendingBridge?.controller.abort()
       this.modelSyncController?.abort()
-      await Promise.allSettled([this.pendingBridge?.task, this.syncingModels, this.disconnecting])
+      await Promise.allSettled([this.pendingBridge?.task, this.syncingModels, this.configuringModel, this.disconnecting])
       this.pendingBridge = null
     })
   }
@@ -483,7 +500,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
   }
 
   /** Bound this read even if an older adapter ignores AbortSignal. No writes are raced. */
-  private async readBuiltinModels(signal: AbortSignal): Promise<readonly { id: string }[]> {
+  private async readBuiltinModels(signal: AbortSignal): Promise<readonly BuiltinModel[]> {
     const llm = this.llm()
     if (llm === undefined || typeof llm.discoverModels !== 'function') throw new SubscriptionError('models-unavailable')
     const timeout = new AbortController()
@@ -541,7 +558,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
     }
 
     const remoteModels = await this.modelDiscovery(discoveryCredential, { signal })
-    let builtinModels: readonly { id: string }[]
+    let builtinModels: readonly BuiltinModel[]
     try {
       builtinModels = await this.readBuiltinModels(signal)
       if (!Array.isArray(builtinModels) || builtinModels.some((candidate) => typeof recordOf(candidate)?.id !== 'string')) {
@@ -552,6 +569,19 @@ class OpenAISubscriptionController extends TypertRemoteService {
       throw new SubscriptionError(failureCode(error, 'models-unavailable'))
     }
     const discovered = unionModelCatalog(remoteModels, builtinModels)
+    const builtinById = new Map(builtinModels.map((model) => [model.id, model]))
+    const limitsById = new Map((remoteModels.contextLimits ?? []).map((limit) => [limit.id, limit.maxContextWindow]))
+    const contextMetadata: ModelContextMetadata[] = discovered.map(({ id }) => {
+      const catalogContextWindow = builtinById.get(id)?.contextWindow
+      const maxContextWindow = limitsById.get(id)
+      return {
+        id,
+        ...(typeof catalogContextWindow === 'number' && Number.isSafeInteger(catalogContextWindow) && catalogContextWindow > 0
+          ? { catalogContextWindow } : {}),
+        ...(typeof maxContextWindow === 'number' && Number.isSafeInteger(maxContextWindow) && maxContextWindow > 0
+          ? { maxContextWindow } : {}),
+      }
+    })
 
     for (let attempt = 0; attempt < 3; attempt++) {
       if (signal.aborted) throw new SubscriptionError('cancelled')
@@ -606,6 +636,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
               ...payload,
               managedPiRoute: payload.managedPiRoute === true || createdRoute,
               managedModels: merged.managed,
+              modelContextMetadata: contextMetadata,
               suppressedModelIds: merged.suppressed,
               modelsSyncedAt: Date.now(),
             },
@@ -680,7 +711,7 @@ class OpenAISubscriptionController extends TypertRemoteService {
     if (method !== 'device_code' && method !== 'refresh') {
       return { started: false, error: '[openai-subscription:invalid-method]', errorCode: 'invalid-method' }
     }
-    if (this.disconnecting != null || this.syncingModels !== null || (this.pendingBridge !== null && !this.pendingBridge.done)) {
+    if (this.disconnecting != null || this.configuringModel != null || this.syncingModels !== null || (this.pendingBridge !== null && !this.pendingBridge.done)) {
       return { started: false, error: '[openai-subscription:busy]', errorCode: 'busy' }
     }
     this.pendingBridge = null
@@ -837,12 +868,87 @@ class OpenAISubscriptionController extends TypertRemoteService {
   }
 
   async syncModels(confirmed?: unknown): Promise<ModelSyncResult> {
-    if (this.disconnecting != null || (this.pendingBridge !== null && !this.pendingBridge.done)) throw new SubscriptionError('busy')
+    if (this.disconnecting != null || this.configuringModel != null || (this.pendingBridge !== null && !this.pendingBridge.done)) throw new SubscriptionError('busy')
     try {
       return await this.synchronizeModels(undefined, confirmed === true)
     } catch (error) {
       throw new SubscriptionError(failureCode(error, 'settings-write-failed'))
     }
+  }
+
+  private assertContextIdle(): void {
+    if (this.disconnecting != null || this.syncingModels !== null || this.configuringModel != null
+      || (this.pendingBridge !== null && !this.pendingBridge.done)) throw new SubscriptionError('busy')
+  }
+
+  /** Never discovers models or resolves authorization: this is a local settings read. */
+  private async readContextSettings() {
+    const settings = this.ctx.get('settings') as SettingsProvider | undefined
+    if (settings === undefined || typeof settings.describe !== 'function') throw new SubscriptionError('settings-unavailable')
+    const credentials = this.credentials()
+    if (credentials === undefined) throw new SubscriptionError('credentials-unavailable')
+    let owner: unknown
+    try { owner = await credentials.readRecord(KEY) } catch (error) {
+      throw new SubscriptionError(failureCode(error, 'credentials-unavailable'))
+    }
+    const descriptor = settings.describe({ redactSecrets: true }).find((entry) => entry.ns === 'llm-pi-ai')
+    if (descriptor === undefined || !Number.isSafeInteger(descriptor.revision) || descriptor.revision < 0) {
+      throw new SubscriptionError('settings-unavailable')
+    }
+    return { settings, descriptor, plugin: grantPayload(owner) }
+  }
+
+  async getModelContexts(): Promise<ModelContextsResult> {
+    this.assertContextIdle()
+    try {
+      const { descriptor, plugin } = await this.readContextSettings()
+      // A sync/logout may have started while the local record was being read.
+      this.assertContextIdle()
+      return {
+        revision: descriptor.revision,
+        models: describeModelContexts(
+          explicitRouteModels(descriptor.user, descriptor.base),
+          plugin.managedModels,
+          plugin.modelContextMetadata,
+          piRoute(descriptor.value)?.defaultContextWindow,
+        ),
+      }
+    } catch (error) {
+      throw new SubscriptionError(failureCode(error, 'settings-unavailable'))
+    }
+  }
+
+  /** Only the named row changes; stale tabs must reload rather than overwrite. */
+  async setModelContext(modelId: unknown, contextWindow: unknown, revision: unknown): Promise<{ saved: true }> {
+    validateContextWindow(contextWindow)
+    if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new SubscriptionError('settings-conflict')
+    }
+    this.assertContextIdle()
+    const pending = this.performContextUpdate(modelId, contextWindow, revision).catch((error: unknown) => {
+      throw new SubscriptionError(failureCode(error, 'settings-write-failed'))
+    })
+    this.configuringModel = pending
+    try { return await pending } finally {
+      if (this.configuringModel === pending) this.configuringModel = null
+    }
+  }
+
+  private async performContextUpdate(modelId: unknown, contextWindow: number | null, revision: number): Promise<{ saved: true }> {
+    const { settings, descriptor, plugin } = await this.readContextSettings()
+    if (typeof settings.mutate !== 'function') throw new SubscriptionError('settings-unavailable')
+    if (descriptor.revision !== revision) throw new SubscriptionError('settings-conflict')
+    const models = configureModelContext(
+      explicitRouteModels(descriptor.user, descriptor.base),
+      plugin.managedModels,
+      plugin.modelContextMetadata,
+      modelId,
+      contextWindow,
+    )
+    // Settings' optimistic revision check is the final guard against file edits
+    // and other processes. Never retry the same UI intent against a newer state.
+    await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', 'openai-codex', 'models'], value: models }], revision)
+    return { saved: true }
   }
 
   /** Serialize disconnect with authorization and sync, including other tabs. */
@@ -870,6 +976,8 @@ class OpenAISubscriptionController extends TypertRemoteService {
     this.modelSyncController?.abort()
     const activeSync = this.syncingModels
     if (activeSync !== null) await activeSync.catch(() => {})
+    const activeContextUpdate = this.configuringModel
+    if (activeContextUpdate != null) await activeContextUpdate.catch(() => {})
     const credentials = this.credentials()
     if (credentials === undefined) throw new SubscriptionError('credentials-unavailable')
     const record = await credentials.readRecord(KEY)

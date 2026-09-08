@@ -40,6 +40,20 @@ interface ModelSyncInfo {
   warningCode?: string
 }
 
+interface ModelContextInfo {
+  id: string
+  name?: string
+  contextWindow?: number
+  defaultContextWindow?: number
+  maxContextWindow?: number
+  customized: boolean
+}
+
+interface ModelContextsInfo {
+  revision: number
+  models: ModelContextInfo[]
+}
+
 interface RemoteResult<T> {
   ok?: boolean
   error?: { code?: string; message?: string } | null
@@ -154,7 +168,35 @@ const ZH: Record<string, string> = {
   'model.synced': '模型已同步',
   'model.attention': '模型需要同步',
   'model.count': '{count} 个可用模型',
-  'model.synced.detail': '账号目录、内置目录和本地编辑已安全合并。',
+  'model.synced.detail': '已合并账号模型与 DSH 内置模型，保留你的本地编辑。',
+  'model.sync.help': '重新获取可用模型列表，不会更换账号或重置本地配置。',
+  'context.title': '模型上下文',
+  'context.help': '按模型设置总上下文窗口（输入 + 输出）。同步模型会保留此设置。',
+  'context.model': '模型',
+  'context.window': '上下文窗口',
+  'context.default': '跟随模型默认',
+  'context.million': '1M · 1,000,000 tokens',
+  'context.custom': '自定义',
+  'context.tokens': '自定义 tokens 数',
+  'context.current': '当前：{count} tokens',
+  'context.maximum': '目录声明上限：{count} tokens',
+  'context.unknown': '目录未声明最大窗口；本机配置不会解锁上游权限，请确认模型和账号支持。',
+  'context.limit.help': '超过目录声明上限的配置不可保存；实际可用性仍取决于账号和上游。',
+  'context.empty': '同步模型后即可配置上下文。',
+  'context.loading': '正在读取模型配置…',
+  'context.save': '保存上下文',
+  'context.saving': '正在保存…',
+  'context.saved': '上下文配置已保存，后续模型请求会使用新设置。',
+  'context.error': '无法读取上下文配置。请确认插件主机端已更新并重启 DSH 后重试。',
+  'error.invalid-context-window': '请输入正整数 tokens 数。',
+  'error.context-window-exceeded': '此设置超过了模型目录声明的最大上下文窗口。',
+  'error.model-not-found': '模型已不在当前列表中，请重新读取配置。',
+  'action.more': '连接管理',
+  'action.less': '收起连接管理',
+  'manage.refresh.help': '请求时会自动续期；仅在授权异常时手动刷新，无需重新登录。',
+  'manage.reconnect.help': '重新进行设备验证，以恢复此账号的授权。',
+  'manage.reload.help': '只重新读取本机状态，不刷新授权，也不同步模型。',
+  'manage.disconnect.help': '删除本机授权和未修改的插件模型项，不影响 ChatGPT 账号。',
   'model.attention.detail': '确认同步后会保留本地新增项与已编辑字段。',
   'action.connect': '连接 ChatGPT',
   'action.connecting': '正在连接…',
@@ -258,7 +300,35 @@ const EN: Record<string, string> = {
   'model.synced': 'Models synced',
   'model.attention': 'Models need syncing',
   'model.count': '{count} models available',
-  'model.synced.detail': 'Account, built-in, and locally edited catalogs are safely merged.',
+  'model.synced.detail': 'Account and DSH models are merged, keeping your local edits.',
+  'model.sync.help': 'Fetch the available model list without switching accounts or resetting local settings.',
+  'context.title': 'Model context',
+  'context.help': 'Set each model’s total context window (input + output). Model sync preserves this setting.',
+  'context.model': 'Model',
+  'context.window': 'Context window',
+  'context.default': 'Use model default',
+  'context.million': '1M · 1,000,000 tokens',
+  'context.custom': 'Custom',
+  'context.tokens': 'Custom token count',
+  'context.current': 'Current: {count} tokens',
+  'context.maximum': 'Catalog limit: {count} tokens',
+  'context.unknown': 'The catalog does not declare a maximum. Local settings do not unlock upstream access; confirm model and account support.',
+  'context.limit.help': 'Values above the catalog limit cannot be saved. Availability still depends on your account and upstream service.',
+  'context.empty': 'Sync models to configure their context windows.',
+  'context.loading': 'Reading model settings…',
+  'context.save': 'Save context',
+  'context.saving': 'Saving…',
+  'context.saved': 'Context settings saved. Subsequent model requests will use the new setting.',
+  'context.error': 'Could not read context settings. Ensure the host plugin is updated and restart DSH before retrying.',
+  'error.invalid-context-window': 'Enter a positive whole number of tokens.',
+  'error.context-window-exceeded': 'This exceeds the maximum context window declared by the model catalog.',
+  'error.model-not-found': 'The model is no longer in the current list. Reload settings.',
+  'action.more': 'Connection management',
+  'action.less': 'Hide connection management',
+  'manage.refresh.help': 'Authorization renews automatically during requests. Refresh manually only to recover from authorization errors.',
+  'manage.reconnect.help': 'Repeat device verification to restore authorization for this account.',
+  'manage.reload.help': 'Read local status only. Does not renew authorization or sync models.',
+  'manage.disconnect.help': 'Remove local authorization and unchanged plugin models, not your ChatGPT account.',
   'model.attention.detail': 'Syncing preserves local additions and fields you edited.',
   'action.connect': 'Connect ChatGPT',
   'action.connecting': 'Connecting…',
@@ -393,8 +463,8 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-primary, #0f1115);
 }
 .oasub-wrap, .oasub-wrap * { box-sizing: border-box; }
-/* Align the header icon and footer button with the card's outer frame. Only the card is inset. */
-.oasub-header, .oasub-footer { padding-inline: 0; }
+/* The header stays flush with the card's outer frame. */
+.oasub-header { padding-inline: 0; }
 .oasub-header { display: flex; align-items: center; gap: 12px; }
 .oasub-mark {
   display: grid;
@@ -450,6 +520,16 @@ window.__ModuleLoader__.load({
 .oasub-model-title { font-size: 13px; font-weight: 500; line-height: 19px; }
 .oasub-model-detail { color: var(--dsw-alias-label-tertiary, #81858c); font-size: 11px; line-height: 17px; }
 .oasub-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.oasub-management { display: flex; flex-direction: column; gap: 16px; border-top: 1px solid var(--dsw-alias-border-l2, rgba(15, 17, 21, .14)); padding-top: 16px; }
+.oasub-manage-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.oasub-manage-row > .oasub-button { flex: 0 0 auto; }
+.oasub-button.disclosure { border-color: transparent; border-radius: 8px; color: var(--dsw-alias-label-secondary, #61666b); padding: 4px 0; min-height: 32px; align-self: flex-start; }
+.oasub-context { display: flex; flex-direction: column; gap: 10px; }
+.oasub-field { display: flex; flex-direction: column; gap: 6px; flex: 1 1 180px; min-width: 0; font-size: 12px; }
+.oasub-context > .oasub-field { flex: none; }
+.oasub-select { width: 100%; min-height: 36px; border: 1px solid var(--oasub-control-border); border-radius: 8px; padding: 7px 10px; font: inherit; color: inherit; background: var(--dsw-alias-bg-layer-1, #fff); }
+.oasub-select:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #4176e6); outline-offset: 2px; }
+.oasub-select:disabled { opacity: .55; }
 .oasub-button {
   appearance: none;
   min-height: 36px;
@@ -522,6 +602,7 @@ window.__ModuleLoader__.load({
   .oasub-status-line { flex-direction: column; }
   .oasub-button { flex: 1 1 auto; }
   .oasub-button.quiet { margin-left: 0; }
+  .oasub-manage-row { align-items: flex-start; flex-direction: column; gap: 8px; }
 }
 @media (forced-colors: active) {
   .oasub-button { border-color: ButtonText; }
@@ -558,6 +639,7 @@ window.__ModuleLoader__.load({
       'timeout', 'invalid-response', 'process-exited', 'credential-write-failed', 'credential-changed',
       'settings-unavailable', 'models-unavailable', 'models-empty', 'models-confirmation-required',
       'settings-conflict', 'settings-write-failed', 'ownership-save-failed', 'cancelled', 'unknown',
+      'invalid-context-window', 'context-window-exceeded', 'model-not-found',
     ])
 
     function allowedCode(value: unknown): string | undefined {
@@ -712,6 +794,26 @@ window.__ModuleLoader__.load({
       return { synced: true, count: raw.count, warningCode: raw.warningCode == null ? undefined : allowedCode(raw.warningCode) ?? 'unknown' }
     }
 
+    function positiveInteger(value: unknown): number | undefined {
+      return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined
+    }
+
+    function parseModelContexts(value: unknown): ModelContextsInfo {
+      const raw = recordOf(value)
+      if (raw === null || typeof raw.revision !== 'number' || !Number.isSafeInteger(raw.revision) || raw.revision < 0 || !Array.isArray(raw.models)) {
+        throw new ClientFailure('invalid-response')
+      }
+      const models: ModelContextInfo[] = []
+      for (const item of raw.models) {
+        const row = recordOf(item)
+        if (!row || typeof row.id !== 'string' || !row.id || models.some((model) => model.id === row.id)) throw new ClientFailure('invalid-response')
+        models.push({ id: row.id, name: typeof row.name === 'string' ? row.name : undefined,
+          contextWindow: positiveInteger(row.contextWindow), defaultContextWindow: positiveInteger(row.defaultContextWindow),
+          maxContextWindow: positiveInteger(row.maxContextWindow), customized: row.customized === true })
+      }
+      return { revision: raw.revision, models }
+    }
+
     function safeVerificationUrl(value: unknown): string | null {
       if (typeof value !== 'string' || value !== value.trim()) return null
       try {
@@ -725,7 +827,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    type Phase = 'idle' | 'starting' | 'authorizing' | 'paused' | 'syncing' | 'disconnecting'
+    type Phase = 'idle' | 'starting' | 'authorizing' | 'paused' | 'syncing' | 'disconnecting' | 'saving-context'
     type ConfirmAction = 'sync' | 'disconnect' | null
     interface ToastState {
       tone: 'success' | 'warning' | 'error' | 'neutral'
@@ -754,6 +856,14 @@ window.__ModuleLoader__.load({
       const [cancelPending, setCancelPending] = React.useState(false)
       const [confirm, setConfirm] = React.useState<ConfirmAction>(null)
       const [statusRevision, setStatusRevision] = React.useState(0)
+      const [managementOpen, setManagementOpen] = React.useState(false)
+      const [contexts, setContexts] = React.useState<ModelContextsInfo | null>(null)
+      const [contextLoading, setContextLoading] = React.useState(false)
+      const [contextError, setContextError] = React.useState<string | null>(null)
+      const [modelId, setModelId] = React.useState('')
+      // null means no pending edit; '' selects the synchronized model default.
+      const [contextDraft, setContextDraft] = React.useState<string | null>(null)
+      const [contextChoice, setContextChoice] = React.useState<'default' | 'million' | 'custom' | null>(null)
       const actionLock = React.useRef(false)
       const cancelAcknowledged = React.useRef(false)
       const flowObserved = React.useRef(false)
@@ -811,6 +921,23 @@ window.__ModuleLoader__.load({
           controller.abort()
         }
       }, [connection, statusRevision])
+
+      React.useEffect(() => {
+        if (!configured) { setContexts(null); setContextDraft(null); setContextChoice(null); return }
+        const controller = new AbortController()
+        setContextLoading(true)
+        setContextError(null)
+        remoteCall<unknown>(connection, 'getModelContexts', {}, controller.signal).then(parseModelContexts).then((result) => {
+          if (controller.signal.aborted) return
+          setContexts(result)
+          setModelId((id) => result.models.some((model) => model.id === id) ? id : result.models[0]?.id ?? '')
+          setContextDraft(null)
+          setContextChoice(null)
+        }).catch((error: unknown) => {
+          if (!controller.signal.aborted) { setContexts(null); setContextError(errorKey(error, 'context.error')) }
+        }).finally(() => { if (!controller.signal.aborted) setContextLoading(false) })
+        return () => controller.abort()
+      }, [connection, configured, statusRevision])
 
       React.useEffect(() => {
         if (props.subscribeReset === undefined) return
@@ -1083,6 +1210,33 @@ window.__ModuleLoader__.load({
           }
         })
       }
+      const selectedModel = contexts?.models.find((model) => model.id === modelId)
+      const savedContext = selectedModel?.customized && selectedModel.contextWindow ? String(selectedModel.contextWindow) : ''
+      const draft = contextDraft ?? savedContext
+      const contextMode = contextChoice ?? (draft === '' ? 'default' : draft === '1000000' ? 'million' : 'custom')
+      const requestedContext = draft === '' ? null : /^\d+$/.test(draft) ? positiveInteger(Number(draft)) : undefined
+      const contextValidation = requestedContext === undefined ? 'error.invalid-context-window'
+        : requestedContext !== null && selectedModel?.maxContextWindow !== undefined && requestedContext > selectedModel.maxContextWindow
+          ? 'error.context-window-exceeded' : null
+      const contextDirty = contextDraft !== null && (draft !== savedContext || (draft === '' && selectedModel?.customized === true))
+      const saveContext = () => {
+        const signal = lifetime.current?.signal
+        if (phaseRef.current !== 'idle' || actionLock.current || !signal || signal.aborted || !contexts || !selectedModel || !contextDirty || contextValidation || contextLoading || statusLoading) return
+        actionLock.current = true
+        changePhase('saving-context')
+        setNotice(null)
+        remoteCall<{ saved: boolean }>(connection, 'setModelContext', {
+          modelId: selectedModel.id, contextWindow: requestedContext, revision: contexts.revision,
+        }, signal, MUTATION_TIMEOUT_MS).then((result) => {
+          if (signal.aborted) return
+          if (result?.saved !== true) throw new ClientFailure('invalid-response')
+          setNotice({ tone: 'success', key: 'context.saved' })
+        }).catch((error: unknown) => {
+          if (!signal.aborted) setNotice({ tone: 'error', key: failureCode(error) === 'timeout' ? 'error.long-action' : errorKey(error, 'error.settings-write-failed') })
+        }).finally(() => {
+          if (!signal.aborted) { actionLock.current = false; changePhase('idle'); reloadStatus() }
+        })
+      }
       const selectCode = () => {
         codeRef.current?.focus()
         codeRef.current?.select()
@@ -1146,6 +1300,7 @@ window.__ModuleLoader__.load({
                     type: 'button',
                     className: 'oasub-button ' + (info.modelsSynced ? '' : 'primary'),
                     disabled: busy,
+                    'aria-describedby': 'oasub-sync-help',
                     onClick: requestModelSync,
                   }, phase === 'syncing' ? t('action.syncing') : t(info.modelsSynced ? 'action.updateModels' : 'action.sync'))
                 : el('button', {
@@ -1154,25 +1309,15 @@ window.__ModuleLoader__.load({
                     disabled: busy || !ready,
                     onClick: () => startAuthorization('device_code'),
                   }, phase === 'starting' || phase === 'authorizing' ? t('action.connecting') : t('action.connect')),
-              configured
+              configured && info.credentialState !== 'valid'
                 ? el('button', {
-                    type: 'button',
-                    className: 'oasub-button',
-                    disabled: busy || !ready,
+                    type: 'button', className: 'oasub-button primary', disabled: busy || !ready,
+                    title: t(info.refreshable ? 'manage.refresh.help' : 'manage.reconnect.help'),
                     onClick: () => startAuthorization(info.refreshable ? 'refresh' : 'device_code'),
-                  }, phase === 'starting' || phase === 'authorizing'
-                    ? t('action.refreshing')
-                    : t(info.refreshable ? 'action.refresh' : 'action.reconnect'))
-                : null,
-              info.cleanupAvailable
-                ? el('button', {
-                    type: 'button',
-                    className: 'oasub-button danger quiet',
-                    disabled: busy,
-                    onClick: () => openConfirm('disconnect'),
-                  }, phase === 'disconnecting' ? t('action.disconnecting') : t('action.disconnect'))
+                  }, phase === 'starting' || phase === 'authorizing' ? t('action.refreshing') : t(info.refreshable ? 'action.refresh' : 'action.reconnect'))
                 : null,
             ),
+            configured ? el('div', { id: 'oasub-sync-help', className: 'oasub-status-detail' }, t('model.sync.help')) : null,
           )
 
       return el('div', { className: 'oasub-wrap' },
@@ -1184,15 +1329,80 @@ window.__ModuleLoader__.load({
           ),
         ),
         statusCard,
+        configured ? el('section', { className: 'oasub-card oasub-context', 'aria-labelledby': 'oasub-context-title' },
+          el('div', { id: 'oasub-context-title', className: 'oasub-status-title' }, t('context.title')),
+          el('div', { className: 'oasub-status-detail' }, t('context.help')),
+          contextLoading ? el('div', { role: 'status', className: 'oasub-status-detail' }, t('context.loading')) : null,
+          contextError ? el('div', { role: 'alert', className: 'oasub-notice error' },
+            t(contextError), el('button', { type: 'button', className: 'oasub-button quiet', disabled: contextLoading, onClick: reloadStatus }, t('action.retry')),
+          ) : null,
+          !contextLoading && contexts?.models.length === 0 ? el('div', { className: 'oasub-status-detail' }, t('context.empty')) : null,
+          selectedModel ? el('div', { className: 'oasub-context' },
+            el('div', { className: 'oasub-actions' },
+              el('label', { className: 'oasub-field' }, t('context.model'),
+                el('select', { className: 'oasub-select', 'aria-label': t('context.model'), value: modelId, disabled: busy || contextLoading || statusLoading,
+                  onChange: (event: { currentTarget: HTMLSelectElement }) => { setModelId(event.currentTarget.value); setContextDraft(null); setContextChoice(null) } },
+                  contexts?.models.map((model) => el('option', { key: model.id, value: model.id }, model.name && model.name !== model.id ? model.name + ' (' + model.id + ')' : model.id))),
+              ),
+              el('label', { className: 'oasub-field' }, t('context.window'),
+                el('select', { className: 'oasub-select', 'aria-label': t('context.window'), value: contextMode, disabled: busy || contextLoading || statusLoading,
+                  'aria-describedby': 'oasub-context-limit',
+                  onChange: (event: { currentTarget: HTMLSelectElement }) => {
+                    const choice = event.currentTarget.value === 'default' ? 'default' : event.currentTarget.value === 'million' ? 'million' : 'custom'
+                    setContextChoice(choice)
+                    setContextDraft(choice === 'default' ? '' : choice === 'million' ? '1000000' : '-')
+                  } },
+                  el('option', { value: 'default' }, t('context.default') + (selectedModel.defaultContextWindow ? ' · ' + selectedModel.defaultContextWindow.toLocaleString() : '')),
+                  el('option', { value: 'million', disabled: selectedModel.maxContextWindow !== undefined && selectedModel.maxContextWindow < 1_000_000 }, t('context.million')),
+                  el('option', { value: 'custom' }, t('context.custom')),
+                ),
+              ),
+            ),
+            contextMode === 'custom' ? el('label', { className: 'oasub-field' }, t('context.tokens'),
+              el('input', { className: 'oasub-select', type: 'text', inputMode: 'numeric', 'aria-label': t('context.tokens'),
+                value: draft === '-' ? '' : draft, disabled: busy || contextLoading || statusLoading,
+                'aria-invalid': contextValidation !== null, 'aria-describedby': 'oasub-context-limit',
+                onChange: (event: { currentTarget: HTMLInputElement }) => setContextDraft(event.currentTarget.value || '-') }),
+            ) : null,
+            selectedModel.contextWindow ? el('div', { className: 'oasub-status-detail' }, t('context.current', { count: selectedModel.contextWindow.toLocaleString() })) : null,
+            el('div', { id: 'oasub-context-limit', className: 'oasub-status-detail' },
+              selectedModel.maxContextWindow ? t('context.maximum', { count: selectedModel.maxContextWindow.toLocaleString() }) + ' · ' + t('context.limit.help') : t('context.unknown')),
+            contextDirty && contextValidation ? el('div', { role: 'alert', className: 'oasub-status-detail' }, t(contextValidation)) : null,
+            contextDirty ? el('div', { className: 'oasub-actions' },
+              el('button', { type: 'button', className: 'oasub-button primary', disabled: busy || contextLoading || statusLoading || contextValidation !== null,
+                onClick: saveContext }, t(phase === 'saving-context' ? 'context.saving' : 'context.save')),
+            ) : null,
+          ) : null,
+        ) : null,
         statusError !== null
           ? el('div', { className: 'oasub-notice error', role: 'alert' },
               t(statusError), info !== null ? ' ' + t('status.stale') : null,
               el('button', { type: 'button', className: 'oasub-button quiet', disabled: statusLoading, onClick: reloadStatus }, t('action.retry')),
             ) : null,
-        el('div', { className: 'oasub-actions oasub-footer' },
-          el('button', { ref: reloadRef, type: 'button', className: 'oasub-button', disabled: statusLoading, onClick: reloadStatus },
-            t(statusLoading ? 'status.reloading' : 'action.reload')),
-        ),
+        el('button', { ref: reloadRef, type: 'button', className: 'oasub-button disclosure',
+          'aria-expanded': managementOpen, 'aria-controls': managementOpen ? 'oasub-management' : undefined,
+          onClick: () => setManagementOpen((open) => !open) },
+          t(managementOpen ? 'action.less' : 'action.more')),
+        managementOpen ? el('section', { id: 'oasub-management', className: 'oasub-management', 'aria-label': t('action.more') },
+          configured && info?.credentialState === 'valid' ? el('div', { className: 'oasub-manage-row' },
+            el('div', { className: 'oasub-status-detail', id: 'oasub-refresh-help' }, t(info.refreshable ? 'manage.refresh.help' : 'manage.reconnect.help')),
+            el('button', { type: 'button', className: 'oasub-button', disabled: busy || !ready,
+              'aria-describedby': 'oasub-refresh-help',
+              onClick: () => startAuthorization(info.refreshable ? 'refresh' : 'device_code') },
+              phase === 'starting' || phase === 'authorizing' ? t('action.refreshing') : t(info.refreshable ? 'action.refresh' : 'action.reconnect')),
+          ) : null,
+          el('div', { className: 'oasub-manage-row' },
+            el('div', { className: 'oasub-status-detail', id: 'oasub-reload-help' }, t('manage.reload.help')),
+            el('button', { type: 'button', className: 'oasub-button', disabled: statusLoading,
+              'aria-describedby': 'oasub-reload-help', onClick: reloadStatus }, t(statusLoading ? 'status.reloading' : 'action.reload')),
+          ),
+          info?.cleanupAvailable ? el('div', { className: 'oasub-manage-row' },
+            el('div', { className: 'oasub-status-detail', id: 'oasub-disconnect-help' }, t('manage.disconnect.help')),
+            el('button', { type: 'button', className: 'oasub-button', disabled: busy,
+              'aria-describedby': 'oasub-disconnect-help', onClick: () => openConfirm('disconnect') },
+              t(phase === 'disconnecting' ? 'action.disconnecting' : 'action.disconnect')),
+          ) : null,
+        ) : null,
         device !== null
           ? el('section', { className: 'oasub-card oasub-device', 'aria-label': t('device.title') },
               el('div', { className: 'oasub-device-head' },

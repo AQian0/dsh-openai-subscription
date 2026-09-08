@@ -5,6 +5,8 @@ import test from 'node:test'
 import { SubscriptionError, type FailureCode } from '../src/errors.js'
 import {
   discoverOpenAIModels,
+  configureModelContext,
+  describeModelContexts,
   mergeModelCatalog,
   parseOpenAIModelCatalog,
   removeManagedModels,
@@ -63,7 +65,43 @@ test('parses picker-visible models from the live Codex response', () => {
       },
     ],
     seenIds: ['later', 'hidden', 'first', 'missing-visibility'],
+    contextLimits: [{ id: 'first', maxContextWindow: 64_000 }],
   })
+})
+
+test('keeps the default context separate from an opt-in million-token maximum', () => {
+  const result = parseOpenAIModelCatalog({ models: [
+    { slug: 'large', visibility: 'list', context_window: 272_000, max_context_window: 1_050_000 },
+    { slug: 'small', visibility: 'list', context_window: 128_000, max_context_window: 128_000 },
+    { slug: 'inconsistent', visibility: 'list', context_window: 2_000_000, max_context_window: 1_000_000 },
+    { slug: 'hidden', visibility: 'hide', context_window: 1_000_000, max_context_window: 2_000_000 },
+    { slug: 'large', visibility: 'list', context_window: 2_000_000, max_context_window: 3_000_000 },
+  ] })
+  assert.deepEqual(result.models, [
+    { id: 'large', contextWindow: 272_000 },
+    { id: 'small', contextWindow: 128_000 },
+    { id: 'inconsistent', contextWindow: 1_000_000 },
+  ])
+  assert.deepEqual(result.contextLimits, [
+    { id: 'large', maxContextWindow: 1_050_000 },
+    { id: 'small', maxContextWindow: 128_000 },
+    { id: 'inconsistent', maxContextWindow: 1_000_000 },
+  ])
+  assert.equal('maxContextWindow' in result.models[0]!, false)
+})
+
+test('ignores invalid context capacities without inventing a maximum', () => {
+  for (const invalid of [undefined, null, '1000000', 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.deepEqual(parseOpenAIModelCatalog({ models: [
+      { slug: 'default', visibility: 'list', context_window: 128_000, max_context_window: invalid },
+      { slug: 'fallback', visibility: 'list', context_window: invalid, max_context_window: 1_000_000 },
+      { slug: 'unknown', visibility: 'list', context_window: invalid, max_context_window: invalid },
+    ] }), {
+      models: [{ id: 'default', contextWindow: 128_000 }, { id: 'fallback', contextWindow: 1_000_000 }, { id: 'unknown' }],
+      seenIds: ['default', 'fallback', 'unknown'],
+      contextLimits: [{ id: 'fallback', maxContextWindow: 1_000_000 }],
+    })
+  }
 })
 
 test('rejects malformed or empty live model catalogs with stable codes', () => {
@@ -424,6 +462,77 @@ test('keeps explicitly removed managed models suppressed across refreshes', () =
   })
 
   assert.deepEqual(mergeModelCatalog(first.models, first.managed, next, first.suppressed), first)
+})
+
+test('describes whitelisted context facts and distinguishes deleted fields from defaults', () => {
+  assert.deepEqual(describeModelContexts([
+    { id: 'large', name: 'Large', contextWindow: 1_000_000, secret: 'do not expose', compat: { secret: true } },
+    { id: 'deleted' },
+    { id: 'unknown' },
+    { id: 'custom', contextWindow: 256_000 },
+    { id: 'new-model' },
+  ], [
+    { id: 'large', contextWindow: 272_000 },
+    { id: 'deleted', contextWindow: 272_000 },
+    { id: 'unknown' },
+    { id: 'new-model' },
+  ], [
+    { id: 'large', maxContextWindow: 1_050_000, catalogContextWindow: 400_000, secret: 'private' },
+    { id: 'deleted', maxContextWindow: 1_050_000, catalogContextWindow: 400_000 },
+    { id: 'new-model' },
+  ], 128_000), [
+    { id: 'large', name: 'Large', contextWindow: 1_000_000, defaultContextWindow: 272_000, maxContextWindow: 1_050_000, customized: true },
+    { id: 'deleted', contextWindow: 400_000, defaultContextWindow: 272_000, maxContextWindow: 1_050_000, customized: true },
+    { id: 'unknown', customized: false },
+    { id: 'custom', contextWindow: 256_000, customized: true },
+    { id: 'new-model', contextWindow: 128_000, defaultContextWindow: 128_000, customized: false },
+  ])
+})
+
+test('configures one million tokens as a local edit surviving repeated catalog refreshes', () => {
+  const previous = [
+    { id: 'large', name: 'Large', contextWindow: 272_000 },
+    { id: 'small', contextWindow: 128_000 },
+  ]
+  const existing = [...previous, { id: 'custom', compat: { local: true } }]
+  const facts = [{ id: 'large', maxContextWindow: 1_050_000 }]
+  const configured = configureModelContext(existing, previous, facts, 'large', 1_000_000)
+  assert.deepEqual(configured, [{ id: 'large', name: 'Large', contextWindow: 1_000_000 }, ...existing.slice(1)])
+  assert.deepEqual(existing[0], { id: 'large', name: 'Large', contextWindow: 272_000 })
+  assert.equal(previous[0]!.contextWindow, 272_000)
+  const remote = [{ id: 'large', name: 'Updated', contextWindow: 300_000 }, { id: 'small', contextWindow: 128_000 }]
+  const merged = mergeModelCatalog(configured, previous, remote)
+  assert.deepEqual(merged.models, [{ id: 'large', name: 'Updated', contextWindow: 1_000_000 }, ...existing.slice(1)])
+  assert.deepEqual(merged.managed, remote)
+  assert.deepEqual(mergeModelCatalog(merged.models, merged.managed, remote), merged)
+  assert.deepEqual(removeManagedModels(merged.models, merged.managed), [merged.models[0], existing[2]])
+  assert.deepEqual(configureModelContext(merged.models, remote, facts, 'large', null), [...remote, existing[2]])
+})
+
+test('restoring context defaults removes a local-only override and preserves other edits', () => {
+  const previous = [{ id: 'builtin' }]
+  const existing = [{ id: 'builtin', name: 'Local name', contextWindow: 1_000_000, maxTokens: 32_000 }]
+  const restored = configureModelContext(existing, previous, undefined, 'builtin', null)
+  assert.deepEqual(restored, [{ id: 'builtin', name: 'Local name', maxTokens: 32_000 }])
+  assert.deepEqual(configureModelContext([{ id: 'custom', contextWindow: 1_000_000 }], [], [], 'custom', null), [{ id: 'custom' }])
+  const deleted = mergeModelCatalog([{ id: 'remote', name: 'Remote' }], [{ id: 'remote', contextWindow: 272_000 }], [{ id: 'remote', contextWindow: 300_000 }])
+  assert.deepEqual(deleted.models, [{ id: 'remote', name: 'Remote' }])
+})
+
+test('context updates reject invalid values, unknown ids and disclosed limit violations', () => {
+  const existing = [{ id: 'small', contextWindow: 128_000 }]
+  const facts = [{ id: 'small', maxContextWindow: 128_000 }]
+  for (const value of [undefined, '1000000', '', true, false, {}, [], 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => configureModelContext(existing, existing, facts, 'small', value), failure('invalid-context-window'))
+  }
+  for (const id of [null, undefined, [], {}, '', 'other', '__proto__']) {
+    assert.throws(() => configureModelContext(existing, existing, facts, id, 100), failure('model-not-found'))
+  }
+  assert.throws(() => configureModelContext(existing, existing, facts, 'small', 1_000_000), failure('context-window-exceeded'))
+  assert.throws(() => configureModelContext([], existing, facts, 'small', 100), failure('model-not-found'))
+  assert.throws(() => configureModelContext([...existing, ...existing], existing, facts, 'small', 100), failure('model-not-found'))
+  assert.deepEqual(configureModelContext(existing, existing, facts, 'small', 128_000), existing)
+  assert.deepEqual(configureModelContext(existing, existing, [], 'small', 1_000_000), [{ id: 'small', contextWindow: 1_000_000 }])
 })
 
 test('treats an absent or empty explicit list as an implicit-catalog reset', () => {

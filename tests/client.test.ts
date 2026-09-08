@@ -171,6 +171,7 @@ class Harness {
         if (name === 'poll') return ok(this.snapshot)
         if (name === 'authorize') return ok({ started: true })
         if (name === 'syncModels') return ok({ synced: true, count: 3 })
+        if (name === 'getModelContexts') return ok({ revision: 1, models: [] })
         return ok({})
       } } },
       timer: { interval: (callback: () => void, delay: number) => {
@@ -286,6 +287,13 @@ class Harness {
     ;(button.props.onClick as () => void)()
     await this.flush()
   }
+  async change(label: string, value: string): Promise<void> {
+    const node = [...this.nodes.values()].find((item) => (item.tag === 'select' || item.tag === 'input') && item.props['aria-label'] === label)
+    assert.ok(node, 'Missing field: ' + label)
+    assert.equal(node.disabled, false)
+    ;(node.props.onChange as (event: unknown) => void)({ currentTarget: { value } })
+    await this.flush()
+  }
   async reset(): Promise<void> { for (const callback of this.resets) callback(); await this.flush() }
   dispose(): void {
     this.mounted = false
@@ -353,18 +361,19 @@ test('outlined controls use visible full-pixel theme-aware borders without overr
   const h = await mount()
   try {
     const css = h.document.styles.map((style) => style.textContent).join('\n')
-    const button = css.match(/\.oasub-button \{([^}]+)\}/)?.[1] ?? ''
+    const button = css.match(/^\.oasub-button \{([^}]+)\}/m)?.[1] ?? ''
     assert.match(button, /border: 1px solid var\(--oasub-control-border\)/)
     assert.match(css, /--oasub-control-border: color-mix\(in srgb, var\(--dsw-alias-label-primary, #0f1115\) 48%, transparent\)/)
     assert.match(css, /\.oasub-button:not\(\.primary\):not\(\.danger\):hover:not\(:disabled\)/)
     assert.doesNotMatch(css, /\.oasub-button:hover:not\(:disabled\) \{[^}]*background:/)
     assert.match(css, /\.oasub-button:focus-visible \{ outline: 2px solid/)
+    assert.match(css, /\.oasub-context > \.oasub-field \{ flex: none; \}/, 'A standalone custom field must not inherit the horizontal 180px flex basis')
     assert.match(css, /@media \(forced-colors: active\)/)
     assert.match(css, /\.oasub-button:disabled \{ border-color: GrayText; color: GrayText; opacity: 1; \}/)
   } finally { h.dispose() }
 })
 
-test('header and reload footer stay flush with the card frame while only card content is inset', async () => {
+test('header stays flush and secondary connection controls are collapsed by default', async () => {
   for (const status of [connected, disconnected]) {
     const h = await mount({ configure: (h) => { h.status = { ...status } } })
     try {
@@ -372,15 +381,25 @@ test('header and reload footer stay flush with the card frame while only card co
       assert.match(css, /--oasub-section-inset: 20px;/)
       assert.match(css, /--oasub-card-border-width: 1px;/)
       assert.match(css, /\.oasub-heading \{ min-width: 0; overflow-wrap: anywhere; \}/)
-      assert.match(css, /\.oasub-header, \.oasub-footer \{ padding-inline: 0; \}/)
-      assert.doesNotMatch(css, /\.oasub-header, \.oasub-footer \{[^}]*--oasub-section-inset/)
+      assert.match(css, /\.oasub-header \{ padding-inline: 0; \}/)
+      assert.doesNotMatch(css, /\.oasub-header \{[^}]*--oasub-section-inset/)
       const card = css.match(/\.oasub-card \{([^}]+)\}/)?.[1] ?? ''
       assert.match(card, /padding: var\(--oasub-section-inset\);/)
       assert.match(card, /border: var\(--oasub-card-border-width\) solid/)
       assert.match(css, /@media \(max-width: 520px\) \{\s*\.oasub-wrap \{ --oasub-section-inset: 16px; \}/)
-      const footers = h.all('div').filter((node) => node.props.className === 'oasub-actions oasub-footer')
-      assert.equal(footers.length, 1, 'Identify the standalone reload row separately from card/dialog actions')
-      assert.equal(footers[0]?.children[0], h.button('Reload status'))
+      assert.equal(h.all('button').length, 2, 'Only the primary action and management disclosure are shown')
+      assert.equal(h.button('Connection management').props['aria-expanded'], false)
+      assert.equal(h.text().includes('Reload status'), false)
+      assert.equal(h.text().includes('Disconnect'), false)
+      await h.click('Connection management')
+      assert.equal(h.button('Hide connection management').props['aria-expanded'], true)
+      assert.equal(h.button('Reload status').props['aria-describedby'], 'oasub-reload-help')
+      assert.ok(h.text().includes(h.translate('manage.reload.help')))
+      if (status.configured) {
+        assert.ok(h.text().includes(h.translate('manage.refresh.help')))
+        assert.ok(h.text().includes(h.translate('manage.disconnect.help')))
+        assert.equal(h.button('Disconnect').props.className, 'oasub-button', 'Destructive styling belongs to the confirmation only')
+      }
     } finally { h.dispose() }
   }
 })
@@ -395,6 +414,7 @@ test('action error persists after automatic, manual, and connection-reset status
     const message = h.translate('error.settings-write-failed')
     assert.ok(h.text().includes(message))
     assert.ok(h.calls.filter((call) => call.method === 'status').length >= 2)
+    await h.click('Connection management')
     await h.click('Reload status')
     assert.ok(h.text().includes(message))
     await h.reset()
@@ -489,6 +509,7 @@ test('safe verification is a native protected link; unavailable or rejected clip
 test('idle poll does not fabricate authorization success for an already connected account', async () => {
   const h = await mount({ configure: (h) => { h.status = { ...connected }; h.snapshot = { status: 'idle', notices: [] } } })
   try {
+    await h.click('Connection management')
     await h.click('Refresh authorization')
     assert.ok(h.text().includes(h.translate('error.poll-idle')))
     assert.equal(h.text().includes(h.translate('toast.connected')), false)
@@ -508,6 +529,7 @@ test('busy authorize does not replay a retained success from an unrelated operat
     h.handlers.authorize = () => ok({ started: false, errorCode: 'busy' })
   } })
   try {
+    await h.click('Connection management')
     await h.click('Refresh authorization')
     assert.ok(h.text().includes(h.translate('error.busy')))
     assert.equal(h.text().includes(h.translate('toast.connected')), false)
@@ -603,7 +625,8 @@ test('initial flowPending resumes progress across remount without starting or ca
     const h = await mount({ configure: (h) => { h.status = { ...disconnected, flowPending: true } } })
     try {
       assert.equal(h.all('input')[0]?.props.value, deviceNotice.code)
-      await h.click('Reload status')
+      await h.click('Connection management')
+    await h.click('Reload status')
       await h.reset()
       await h.advance(1_000)
       assert.equal(h.all('input')[0]?.props.value, deviceNotice.code)
@@ -674,6 +697,7 @@ test('expired and unknown credentials never claim usable, and partial cleanup re
   try {
     assert.ok(h.text().includes(h.translate('error.shell-unavailable')))
     assert.equal(h.button('Connect ChatGPT').disabled, true)
+    await h.click('Connection management')
     assert.equal(h.button('Disconnect').disabled, false)
     await h.click('Disconnect')
     assert.ok([...h.nodes.values()].some((node) => node.props.role === 'dialog'))
@@ -734,6 +758,7 @@ test('model sync and logout have a 75 second timeout and no automatic mutation r
     try {
       if (method === 'syncModels') await h.click('Update models')
       else {
+        await h.click('Connection management')
         await h.click('Disconnect')
         const dialog = [...h.nodes.values()].find((node) => node.props.role === 'dialog')!
         const confirmation = dialog.children.flatMap((node) => node.children).find((node) => node.tag === 'button' && node.textContent.trim() === 'Disconnect')!
@@ -788,6 +813,146 @@ test('unmount aborts in-flight actions and prevents late state updates or implic
   assert.equal(h.updatesAfterUnmount, 0)
   assert.equal(h.calls.some((call) => call.method === 'cancel' || call.method === 'poll'), false)
   assert.equal(h.timers.size, 0)
+})
+
+const contextCatalog = { revision: 12, models: [
+  { id: 'large-model', name: 'Large model', contextWindow: 272_000, defaultContextWindow: 272_000, maxContextWindow: 1_050_000, customized: false },
+  { id: 'small-model', contextWindow: 128_000, defaultContextWindow: 128_000, maxContextWindow: 128_000, customized: false },
+  { id: 'unknown-limit', contextWindow: 400_000, defaultContextWindow: 400_000, customized: false },
+] }
+
+function withContexts(h: Harness): void {
+  h.status = { ...connected }
+  h.handlers.getModelContexts = () => ok(contextCatalog)
+  h.handlers.setModelContext = () => ok({ saved: true })
+}
+
+test('context defaults are read-only; explicit 1M selection saves only the selected model and revision', async () => {
+  for (const language of ['en', 'zh']) {
+    const h = await mount({ language, configure: withContexts })
+    try {
+      assert.equal(h.calls.some((call) => call.method === 'setModelContext'), false)
+      assert.equal(h.all('button').some((node) => node.textContent === h.translate('context.save')), false)
+      assert.ok(h.text().includes('272,000'))
+      await h.change(h.translate('context.window'), 'million')
+      await h.click(h.translate('context.save'))
+      const saves = h.calls.filter((call) => call.method === 'setModelContext')
+      assert.equal(saves.length, 1)
+      assert.equal(saves[0]?.args.modelId, 'large-model')
+      assert.equal(saves[0]?.args.contextWindow, 1_000_000)
+      assert.equal(saves[0]?.args.revision, 12)
+      assert.ok(h.text().includes(h.translate('context.saved')))
+      assert.equal(h.calls.some((call) => call.method === 'authorize' || call.method === 'syncModels'), false)
+      assert.ok(h.calls.filter((call) => call.method === 'getModelContexts').length >= 2)
+    } finally { h.dispose() }
+  }
+})
+
+test('context controls enforce known maxima and validate custom positive whole token counts', async () => {
+  const h = await mount({ configure: withContexts })
+  try {
+    await h.change('Model', 'small-model')
+    assert.equal(h.all('option').find((node) => node.props.value === 'million')?.disabled, true)
+    await h.change('Context window', 'custom')
+    for (const value of ['0', '-1', '1.5', '1e6', 'NaN', '9007199254740992', '128001']) {
+      await h.change('Custom token count', value)
+      assert.equal(h.button('Save context').disabled, true, value)
+    }
+    assert.ok(h.text().includes(h.translate('error.context-window-exceeded')))
+    await h.change('Custom token count', '64000')
+    await h.click('Save context')
+    assert.equal(h.calls.find((call) => call.method === 'setModelContext')?.args.contextWindow, 64_000)
+  } finally { h.dispose() }
+})
+
+test('unknown limits allow explicit opt-in with a capability warning and model changes discard unsaved drafts', async () => {
+  const h = await mount({ configure: withContexts })
+  try {
+    await h.change('Context window', 'million')
+    await h.change('Model', 'unknown-limit')
+    assert.ok(h.text().includes(h.translate('context.unknown')))
+    assert.equal(h.all('button').some((node) => node.textContent === 'Save context'), false)
+    await h.change('Context window', 'custom')
+    await h.change('Custom token count', '1000000')
+    assert.equal(h.all('select').find((node) => node.props['aria-label'] === 'Context window')?.props.value, 'custom')
+    await h.change('Custom token count', '1000001')
+    await h.click('Save context')
+    assert.equal(h.calls.find((call) => call.method === 'setModelContext')?.args.modelId, 'unknown-limit')
+    assert.equal(h.calls.find((call) => call.method === 'setModelContext')?.args.contextWindow, 1_000_001)
+  } finally { h.dispose() }
+})
+
+test('restoring default sends null, never rewrites the catalog default as a user override', async () => {
+  const h = await mount({ configure: (h) => {
+    withContexts(h)
+    h.handlers.getModelContexts = () => ok({ revision: 13, models: [{ ...contextCatalog.models[0], contextWindow: 1_000_000, customized: true }] })
+  } })
+  try {
+    await h.change('Context window', 'default')
+    await h.click('Save context')
+    assert.equal(h.calls.find((call) => call.method === 'setModelContext')?.args.contextWindow, null)
+  } finally { h.dispose() }
+})
+
+test('restoring a deleted legacy context field remains possible when its current fallback is unknown', async () => {
+  const h = await mount({ configure: (h) => {
+    withContexts(h)
+    h.handlers.getModelContexts = () => ok({ revision: 13, models: [{ id: 'legacy', defaultContextWindow: 272_000, customized: true }] })
+  } })
+  try {
+    await h.change('Context window', 'default')
+    await h.click('Save context')
+    assert.equal(h.calls.find((call) => call.method === 'setModelContext')?.args.contextWindow, null)
+  } finally { h.dispose() }
+})
+
+test('context errors remain visible after reload; timed-out writes are not repeated', async () => {
+  for (const code of ['settings-conflict', 'context-window-exceeded', 'model-not-found', 'timeout']) {
+    const h = await mount({ configure: (h) => {
+      withContexts(h)
+      h.handlers.setModelContext = () => code === 'timeout' ? new Promise(() => {}) : { ok: false, error: { code, message: 'SECRET_DIAGNOSTIC' } }
+    } })
+    try {
+      await h.change('Context window', 'million')
+      await h.click('Save context')
+      if (code === 'timeout') await h.advance(75_000)
+      assert.ok(h.text().includes(h.translate(code === 'timeout' ? 'error.long-action' : 'error.' + code)))
+      assert.equal(h.text().includes('SECRET_DIAGNOSTIC'), false)
+      await h.advance(90_000)
+      assert.equal(h.calls.filter((call) => call.method === 'setModelContext').length, 1)
+      assert.equal(h.text().includes(h.translate('context.saved')), false)
+    } finally { h.dispose() }
+  }
+})
+
+test('failed context reads clear stale editable controls and offer a retry', async () => {
+  const h = await mount({ configure: withContexts })
+  try {
+    await h.change('Context window', 'million')
+    h.handlers.getModelContexts = () => { throw new Error('SECRET_DIAGNOSTIC') }
+    await h.reset()
+    assert.equal(h.all('select').length, 0)
+    assert.equal(h.text().includes('SECRET_DIAGNOSTIC'), false)
+    assert.ok(h.text().includes(h.translate('context.error')))
+    delete h.handlers.getModelContexts
+    await h.click('Retry')
+    assert.ok(h.text().includes(h.translate('context.empty')))
+  } finally { h.dispose() }
+})
+
+test('unmount aborts a pending context save without late notifications', async () => {
+  let resolve: ((value: RpcReply) => void) | undefined
+  const h = await mount({ configure: (h) => {
+    withContexts(h)
+    h.handlers.setModelContext = () => new Promise((done) => { resolve = done })
+  } })
+  await h.change('Context window', 'million')
+  await h.click('Save context')
+  h.dispose()
+  assert.equal(h.calls.find((call) => call.method === 'setModelContext')?.signal.aborted, true)
+  resolve?.(ok({ saved: true }))
+  await h.flush()
+  assert.equal(h.updatesAfterUnmount, 0)
 })
 
 test('fallback localization uses browser English or Chinese without locale service', async () => {

@@ -6,7 +6,8 @@ export const FAILURE_CODES = [
   'network', 'timeout', 'invalid-response', 'process-exited', 'credential-write-failed',
   'credential-changed', 'settings-unavailable', 'models-unavailable', 'models-empty',
   'models-confirmation-required', 'settings-conflict', 'settings-write-failed',
-  'ownership-save-failed', 'cancelled', 'unknown',
+  'ownership-save-failed', 'invalid-context-window', 'context-window-exceeded', 'model-not-found',
+  'cancelled', 'unknown',
 ] as const
 
 export type FailureCode = typeof FAILURE_CODES[number]

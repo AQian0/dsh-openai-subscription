@@ -51,11 +51,37 @@ export interface ModelDiscoveryOptions {
   timeoutMs?: number
 }
 
+export interface ModelContextLimit {
+  id: string
+  /** A disclosed upper bound, not the model's default context window. */
+  maxContextWindow: number
+}
+
 export interface DiscoveredModelCatalog {
   /** Models the account-scoped picker exposes. */
   models: ModelProfile[]
   /** Every valid slug mentioned upstream, including explicitly hidden rows. */
   seenIds: string[]
+  /** Kept outside DSH model profiles: its schema only accepts contextWindow. */
+  contextLimits?: ModelContextLimit[]
+}
+
+/** Non-secret catalog facts kept alongside the ownership snapshot. */
+export interface ModelContextMetadata {
+  id: string
+  maxContextWindow?: number
+  /** The installed catalog fallback used when an explicit field is removed. */
+  catalogContextWindow?: number
+}
+
+/** Safe, deliberately whitelisted facts for the context settings UI. */
+export interface ModelContextInfo {
+  id: string
+  name?: string
+  contextWindow?: number
+  defaultContextWindow?: number
+  maxContextWindow?: number
+  customized: boolean
 }
 
 export interface MergedModelCatalog {
@@ -120,6 +146,7 @@ export function parseOpenAIModelCatalog(value: unknown): DiscoveredModelCatalog 
   if (root === null || !Array.isArray(root.models)) throw new SubscriptionError('invalid-response')
 
   const candidates: Array<{ model: ModelProfile; priority: number; index: number }> = []
+  const contextLimits: ModelContextLimit[] = []
   const seenIds = new Set<string>()
   const adoptedIds = new Set<string>()
   for (let index = 0; index < root.models.length; index++) {
@@ -132,7 +159,14 @@ export function parseOpenAIModelCatalog(value: unknown): DiscoveredModelCatalog 
 
     const model: ModelProfile = { id }
     const name = nonEmptyString(raw.display_name)
-    const contextWindow = positiveInteger(raw.context_window) ?? positiveInteger(raw.max_context_window)
+    const defaultContextWindow = positiveInteger(raw.context_window)
+    const maxContextWindow = positiveInteger(raw.max_context_window)
+    // A larger advertised maximum is opt-in, not permission to enlarge every
+    // model automatically. Inconsistent defaults must not exceed a known cap.
+    const contextWindow = defaultContextWindow === undefined ? maxContextWindow
+      : maxContextWindow === undefined ? defaultContextWindow
+        : Math.min(defaultContextWindow, maxContextWindow)
+    if (maxContextWindow !== undefined) contextLimits.push({ id, maxContextWindow })
     const input = normalizeInputs(raw.input_modalities)
     const reasoningEfforts = normalizeReasoning(raw.supported_reasoning_levels)
     if (name !== undefined) model.name = name
@@ -151,7 +185,7 @@ export function parseOpenAIModelCatalog(value: unknown): DiscoveredModelCatalog 
   candidates.sort((left, right) => left.priority - right.priority || left.index - right.index)
   const models = candidates.map((candidate) => candidate.model)
   if (models.length === 0) throw new SubscriptionError('models-empty')
-  return { models, seenIds: [...seenIds] }
+  return { models, seenIds: [...seenIds], ...(contextLimits.length > 0 ? { contextLimits } : {}) }
 }
 
 function abortableSignal(parent: AbortSignal | undefined, timeoutMs: number): {
@@ -311,6 +345,76 @@ function modelProfiles(value: unknown): ModelProfile[] {
     result.push({ ...record, id })
   }
   return result
+}
+
+/** Read only context metadata; never pass unknown settings or owner fields to Web. */
+export function describeModelContexts(
+  existing: unknown,
+  previousManaged: unknown,
+  contextMetadata: unknown,
+  defaultContextWindow?: unknown,
+): ModelContextInfo[] {
+  const managed = new Map(modelProfiles(previousManaged).map((model) => [model.id, model]))
+  const metadata = new Map(modelProfiles(contextMetadata).map((model) => [model.id, model]))
+  return modelProfiles(existing).map((model) => {
+    const previous = managed.get(model.id)
+    const facts = metadata.get(model.id)
+    // Metadata presence proves this id was compared with the installed catalog.
+    // Without it (pre-upgrade snapshots), an absent field is unknown rather than
+    // an invented fallback that could misrepresent DSH's actual model capacity.
+    const inherited = facts === undefined ? undefined
+      : positiveInteger(facts.catalogContextWindow) ?? positiveInteger(defaultContextWindow)
+    const current = positiveInteger(model.contextWindow) ?? inherited
+    const baseline = positiveInteger(previous?.contextWindow) ?? inherited
+    const max = positiveInteger(facts?.maxContextWindow)
+    const name = nonEmptyString(model.name)
+    return {
+      id: model.id,
+      ...(name === undefined ? {} : { name }),
+      ...(current === undefined ? {} : { contextWindow: current }),
+      ...(baseline === undefined ? {} : { defaultContextWindow: baseline }),
+      ...(max === undefined ? {} : { maxContextWindow: max }),
+      customized: !Object.is(model.contextWindow, previous?.contextWindow),
+    }
+  })
+}
+
+/** Validate at the public boundary before reading or modifying any services. */
+export function validateContextWindow(value: unknown): asserts value is number | null {
+  if (value !== null && positiveInteger(value) === undefined) throw new SubscriptionError('invalid-context-window')
+}
+
+/**
+ * Update exactly one explicit row as a local edit. The provider snapshot stays
+ * untouched, so subsequent three-way merges retain this choice. Null restores
+ * that snapshot's field (or removes it to inherit the installed catalog).
+ */
+export function configureModelContext(
+  existing: unknown,
+  previousManaged: unknown,
+  contextMetadata: unknown,
+  modelId: unknown,
+  contextWindow: unknown,
+): ModelProfile[] {
+  validateContextWindow(contextWindow)
+  if (typeof modelId !== 'string' || modelId.length === 0 || !Array.isArray(existing)) {
+    throw new SubscriptionError('model-not-found')
+  }
+  const matches = existing.filter((model) => recordOf(model)?.id === modelId)
+  if (matches.length !== 1) throw new SubscriptionError('model-not-found')
+  const previous = modelProfiles(previousManaged).find((model) => model.id === modelId)
+  const facts = modelProfiles(contextMetadata).find((model) => model.id === modelId)
+  const next = contextWindow === null ? positiveInteger(previous?.contextWindow) : contextWindow
+  const max = positiveInteger(facts?.maxContextWindow)
+  if (next !== undefined && max !== undefined && next > max) throw new SubscriptionError('context-window-exceeded')
+  // Preserve every other row/field, including fields this plugin does not own.
+  return existing.map((candidate) => {
+    if (recordOf(candidate)?.id !== modelId) return candidate as ModelProfile
+    const model = { ...candidate } as ModelProfile
+    if (next === undefined) delete model.contextWindow
+    else model.contextWindow = next
+    return model
+  })
 }
 
 function jsonEqual(left: unknown, right: unknown): boolean {

@@ -7,7 +7,7 @@ import OpenAISubscriptionController, { authModuleCandidates as platformCandidate
 import { SubscriptionError } from '../src/errors.js'
 const { join, resolve } = posix
 const authModuleCandidates = (entry: string | undefined, binary: string | undefined, env: NodeJS.ProcessEnv) => platformCandidates(entry, binary, env, 'linux')
-import type { DiscoveredModelCatalog } from '../src/models.js'
+import type { DiscoveredModelCatalog, ModelProfile } from '../src/models.js'
 
 const MAIN_KEY = 'dsh-openai-subscription/chatgpt'
 const ADAPTER_KEY = 'llm-pi-ai/openai-codex'
@@ -49,6 +49,9 @@ interface ControllerHarness {
   ): Promise<unknown>
   synchronizeModels(signal?: AbortSignal, adoptExistingModels?: boolean): Promise<{ synced: true; count: number }>
   syncModels: OpenAISubscriptionController['syncModels']
+  getModelContexts: OpenAISubscriptionController['getModelContexts']
+  setModelContext: OpenAISubscriptionController['setModelContext']
+  configuringModel: Promise<{ saved: true }> | null
   logout: OpenAISubscriptionController['logout']
 }
 
@@ -61,6 +64,7 @@ function controllerWith(services: Record<string, unknown>): ControllerHarness {
   controller.locatingModule = null
   controller.syncingModels = null
   controller.modelSyncController = null
+  controller.configuringModel = null
   controller.modelDiscovery = async () => { throw new Error('unexpected model discovery') }
   controller.pendingBridge = null
   return controller
@@ -68,7 +72,8 @@ function controllerWith(services: Record<string, unknown>): ControllerHarness {
 
 test('source-mode RPC methods expose bare wire parameter names without defaults', () => {
   const expected: Record<string, string> = {
-    status: '', authorize: 'method', poll: '', cancel: '', syncModels: 'confirmed', logout: '',
+    status: '', authorize: 'method', poll: '', cancel: '', syncModels: 'confirmed',
+    getModelContexts: '', setModelContext: 'modelId, contextWindow, revision', logout: '',
   }
   const methods = remoteMethods(controllerWith({})).map(({ method }) => method)
   assert.deepEqual(methods, Object.keys(expected))
@@ -220,6 +225,7 @@ test('syncModels adopts live models while preserving local model entries and edi
 
 test('authorization refresh preserves model ownership metadata', async () => {
   const managedModels = [{ id: 'managed' }]
+  const modelContextMetadata = [{ id: 'managed', maxContextWindow: 1_050_000, catalogContextWindow: 400_000 }]
   const records: Record<string, StoredRecord | undefined> = {
     [MAIN_KEY]: {
       kind: 'grant',
@@ -228,6 +234,7 @@ test('authorization refresh preserves model ownership metadata', async () => {
         refresh: 'old-refresh',
         managedPiRoute: true,
         managedModels,
+        modelContextMetadata,
         suppressedModelIds: ['removed'],
         modelsSyncedAt: 123,
       },
@@ -272,6 +279,7 @@ test('authorization refresh preserves model ownership metadata', async () => {
     () => {},
   )
   assert.deepEqual(records[MAIN_KEY]?.payload.managedModels, managedModels)
+  assert.deepEqual(records[MAIN_KEY]?.payload.modelContextMetadata, modelContextMetadata)
   assert.deepEqual(records[MAIN_KEY]?.payload.suppressedModelIds, ['removed'])
   assert.equal(records[MAIN_KEY]?.payload.modelsSyncedAt, 123)
   assert.equal(records[MAIN_KEY]?.payload.managedPiRoute, true)
@@ -546,6 +554,252 @@ test('logout removes unchanged synced rows but preserves custom models and profi
     }],
     9,
   ]])
+})
+
+function contextController(layer: 'user' | 'base' = 'user') {
+  const managedModels: ModelProfile[] = [
+    { id: 'large', name: 'Large', contextWindow: 272_000 },
+    { id: 'small', contextWindow: 128_000 },
+    { id: 'builtin' },
+  ]
+  const records: Record<string, StoredRecord | undefined> = {
+    [MAIN_KEY]: { kind: 'grant', payload: {
+      access: 'private-token', accountId: 'private-account', managedModels,
+      modelContextMetadata: [
+        { id: 'large', maxContextWindow: 1_050_000, catalogContextWindow: 400_000 },
+        { id: 'small', maxContextWindow: 128_000 },
+        { id: 'builtin', catalogContextWindow: 200_000 },
+      ],
+    } },
+    [ADAPTER_KEY]: { kind: 'grant', payload: { access: 'private-token' } },
+  }
+  const state = {
+    revision: 10,
+    models: [...managedModels.map((model) => ({ ...model })), { id: 'custom', name: 'Local', compat: { local: true } }] as ModelProfile[],
+    mutations: 0,
+    ownerWrites: 0,
+    accountRequests: 0,
+    credentialReads: [] as string[],
+  }
+  const settings = {
+    describe: () => [{
+      ns: 'llm-pi-ai', revision: state.revision,
+      [layer]: { providers: { 'openai-codex': { transport: 'sse', models: state.models } } },
+      value: { providers: { 'openai-codex': { defaultContextWindow: 64_000, models: state.models.map((model) => ({ ...model, input: [] })) } } },
+    }],
+    mutate: async (namespace: string, operations: Array<{ op: string; path: string[]; value: ModelProfile[] }>, revision: number) => {
+      assert.equal(namespace, 'llm-pi-ai')
+      assert.equal(revision, state.revision)
+      assert.deepEqual(operations[0]?.path, ['providers', 'openai-codex', 'models'])
+      assert.equal(operations[0]?.op, 'set')
+      state.models = structuredClone(operations[0]!.value)
+      state.revision++
+      state.mutations++
+    },
+  }
+  const controller = controllerWith({
+    settings,
+    credentials: {
+      readRecord: async (key: string) => { state.credentialReads.push(key); return records[key] },
+      modifyRecord: async (key: string, modify: (record: StoredRecord | undefined) => Promise<StoredRecord | undefined>) => {
+        state.ownerWrites++
+        records[key] = await modify(records[key])
+      },
+    },
+    llm: { discoverModels: async () => [{ id: 'builtin', contextWindow: 200_000 }, { id: 'large', contextWindow: 400_000 }] },
+  })
+  controller.modelDiscovery = async () => {
+    state.accountRequests++
+    return {
+      models: [{ id: 'large', name: 'Large v2', contextWindow: 300_000 }, { id: 'small', contextWindow: 128_000 }],
+      seenIds: ['large', 'small'],
+      contextLimits: [{ id: 'large', maxContextWindow: 1_050_000 }, { id: 'small', maxContextWindow: 128_000 }],
+    }
+  }
+  return { controller, state, records, settings }
+}
+
+test('context RPC reads only local metadata and sets one model without changing ownership', async () => {
+  const { controller, state, records } = contextController()
+  assert.deepEqual(await controller.getModelContexts(), {
+    revision: 10,
+    models: [
+      { id: 'large', name: 'Large', contextWindow: 272_000, defaultContextWindow: 272_000, maxContextWindow: 1_050_000, customized: false },
+      { id: 'small', contextWindow: 128_000, defaultContextWindow: 128_000, maxContextWindow: 128_000, customized: false },
+      { id: 'builtin', contextWindow: 200_000, defaultContextWindow: 200_000, customized: false },
+      { id: 'custom', name: 'Local', customized: false },
+    ],
+  })
+  const originalOwner = structuredClone(records[MAIN_KEY])
+  assert.deepEqual(await controller.setModelContext('large', 1_000_000, 10), { saved: true })
+  const updated = await controller.getModelContexts()
+  assert.equal(updated.revision, 11)
+  assert.equal(updated.models[0]?.contextWindow, 1_000_000)
+  assert.equal(updated.models[0]?.customized, true)
+  assert.equal(state.models[1]?.contextWindow, 128_000)
+  assert.equal(state.models[2]?.contextWindow, undefined)
+  assert.deepEqual(state.models[3], { id: 'custom', name: 'Local', compat: { local: true } })
+  assert.ok(state.models.every((model) => !('input' in model)))
+  assert.equal(state.accountRequests, 0)
+  assert.equal(state.ownerWrites, 0)
+  assert.deepEqual(records[MAIN_KEY], originalOwner)
+  assert.deepEqual([...new Set(state.credentialReads)], [MAIN_KEY])
+  assert.doesNotMatch(JSON.stringify(updated), /private|accountId|access|refresh|compat/)
+})
+
+test('context changes persist through model sync and restore to the latest default', async () => {
+  const { controller, state, records } = contextController()
+  await controller.setModelContext('large', 1_000_000, 10)
+  await controller.syncModels()
+  assert.equal(state.models[0]?.contextWindow, 1_000_000)
+  assert.equal(state.models[0]?.name, 'Large v2')
+  const snapshot = await controller.getModelContexts()
+  assert.equal(snapshot.models[0]?.defaultContextWindow, 300_000)
+  assert.equal(snapshot.models[0]?.maxContextWindow, 1_050_000)
+  assert.deepEqual(records[MAIN_KEY]?.payload.managedModels, [
+    { id: 'large', name: 'Large v2', contextWindow: 300_000 },
+    { id: 'small', contextWindow: 128_000 },
+    { id: 'builtin' },
+  ])
+  assert.deepEqual(records[MAIN_KEY]?.payload.modelContextMetadata, [
+    { id: 'large', catalogContextWindow: 400_000, maxContextWindow: 1_050_000 },
+    { id: 'small', maxContextWindow: 128_000 },
+    { id: 'builtin', catalogContextWindow: 200_000 },
+  ])
+  await controller.setModelContext('large', null, snapshot.revision)
+  assert.equal(state.models[0]?.contextWindow, 300_000)
+  assert.equal((await controller.getModelContexts()).models[0]?.customized, false)
+  await controller.setModelContext('builtin', 1_000_000, state.revision)
+  await controller.setModelContext('builtin', null, state.revision)
+  assert.equal('contextWindow' in state.models[2]!, false)
+  assert.equal((await controller.getModelContexts()).models[2]?.contextWindow, 200_000)
+})
+
+test('sync preserves manual context edits when the advertised maximum changes', async () => {
+  const { controller, state } = contextController()
+  // Simulate the user editing DSH's settings directly, rather than via this RPC.
+  state.models[0] = { ...state.models[0]!, contextWindow: 1_000_000, name: 'My model' }
+  controller.modelDiscovery = async () => ({
+    models: [{ id: 'large', name: 'Remote', contextWindow: 128_000 }],
+    seenIds: ['large'],
+    contextLimits: [{ id: 'large', maxContextWindow: 256_000 }],
+  })
+  await controller.syncModels()
+  const snapshot = await controller.getModelContexts()
+  assert.equal(snapshot.models[0]?.contextWindow, 1_000_000)
+  assert.equal(snapshot.models[0]?.maxContextWindow, 256_000)
+  assert.equal(snapshot.models[0]?.name, 'My model')
+  await assert.rejects(controller.setModelContext('large', 1_000_000, snapshot.revision), /context-window-exceeded/)
+  await controller.setModelContext('large', null, snapshot.revision)
+  assert.equal(state.models[0]?.contextWindow, 128_000)
+  assert.equal(state.models[0]?.name, 'My model')
+})
+
+test('context updates copy explicit base profiles without materializing schema defaults', async () => {
+  const { controller, state } = contextController('base')
+  await controller.setModelContext('large', 1_000_000, state.revision)
+  assert.equal(state.models[0]?.contextWindow, 1_000_000)
+  assert.equal(state.models[1]?.contextWindow, 128_000)
+  assert.equal('input' in state.models[0]!, false)
+  assert.equal(state.models[3]?.name, 'Local')
+})
+
+test('context RPC rejects stale revisions, bad values, unsupported sizes and unknown models', async () => {
+  const { controller, state } = contextController()
+  for (const value of [undefined, '1000000', 0, -1, 1.1, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, {}, true]) {
+    await assert.rejects(controller.setModelContext('large', value, 10), /invalid-context-window/)
+  }
+  assert.equal(state.credentialReads.length, 0)
+  for (const revision of [undefined, '10', null, -1, 0.1, 9, 11, Infinity]) {
+    await assert.rejects(controller.setModelContext('large', 1_000_000, revision), /settings-conflict/)
+  }
+  await assert.rejects(controller.setModelContext('small', 1_000_000, 10), /context-window-exceeded/)
+  await assert.rejects(controller.setModelContext('absent', 1_000_000, 10), /model-not-found/)
+  await assert.rejects(controller.setModelContext({}, 1_000_000, 10), /model-not-found/)
+  assert.equal(state.mutations, 0)
+  await controller.setModelContext('large', 1_000_000, 10)
+  state.models[0] = { ...state.models[0]!, contextWindow: 900_000, name: 'Concurrent file edit' }
+  state.revision++
+  await assert.rejects(controller.setModelContext('large', null, 11), /settings-conflict/)
+  assert.equal(state.models[0]?.contextWindow, 900_000)
+  assert.equal(state.models[0]?.name, 'Concurrent file edit')
+  assert.equal(state.mutations, 1)
+})
+
+test('context RPC never retries conflicting writes or exposes settings diagnostics', async () => {
+  for (const conflict of [true, false]) {
+    const { controller, settings } = contextController()
+    let attempts = 0
+    settings.mutate = async () => {
+      attempts++
+      throw Object.assign(new Error('private settings diagnostic'), conflict ? { code: 'SETTINGS_CONFLICT' } : {})
+    }
+    await assert.rejects(controller.setModelContext('large', 1_000_000, 10), {
+      message: `[openai-subscription:${conflict ? 'settings-conflict' : 'settings-write-failed'}]`,
+    })
+    assert.equal(attempts, 1)
+    assert.equal(controller.configuringModel, null)
+  }
+})
+
+test('context RPC sanitizes failed local reads and never requires a login component', async () => {
+  const { controller } = contextController()
+  controller.cachedModule = null
+  controller.probeInProcessModule = () => { throw new Error('must not locate auth') }
+  await controller.getModelContexts()
+  await controller.setModelContext('large', 1_000_000, 10)
+  const noSettings = controllerWith({})
+  await assert.rejects(noSettings.getModelContexts(), /settings-unavailable/)
+  const noCredentials = controllerWith({ settings: { describe() {} } })
+  await assert.rejects(noCredentials.getModelContexts(), /credentials-unavailable/)
+  const failedRead = controllerWith({
+    settings: { describe() {} },
+    credentials: { readRecord: async () => { throw new Error('private record diagnostic') } },
+  })
+  await assert.rejects(failedRead.getModelContexts(), { message: '[openai-subscription:credentials-unavailable]' })
+})
+
+test('context operations serialize with sync and authorization across tabs', async () => {
+  const { controller, settings } = contextController()
+  let started!: () => void
+  const start = new Promise<void>((resolve) => { started = resolve })
+  let finish!: () => void
+  const originalMutate = settings.mutate
+  settings.mutate = async (...args) => {
+    started()
+    await new Promise<void>((resolve) => { finish = resolve })
+    await originalMutate(...args)
+  }
+  const pending = controller.setModelContext('large', 1_000_000, 10)
+  await start
+  await assert.rejects(controller.setModelContext('small', 100_000, 10), /busy/)
+  await assert.rejects(controller.getModelContexts(), /busy/)
+  await assert.rejects(controller.syncModels(), /busy/)
+  assert.equal((await controller.authorize('device_code')).started, false)
+  finish()
+  await pending
+  controller.syncingModels = Promise.resolve({ synced: true, count: 0 })
+  await assert.rejects(controller.setModelContext('large', null, 11), /busy/)
+  await assert.rejects(controller.getModelContexts(), /busy/)
+  controller.syncingModels = null
+})
+
+test('logout awaits an active context save before model cleanup', async () => {
+  const calls: string[] = []
+  let finish!: () => void
+  const controller = controllerWith({
+    credentials: {
+      readRecord: async () => { calls.push('read'); return { kind: 'grant', payload: {} } },
+      deleteRecord: async (key: string) => { calls.push(key) },
+    },
+  })
+  controller.configuringModel = new Promise<{ saved: true }>((resolve) => { finish = () => resolve({ saved: true }) })
+  const logout = controller.logout()
+  assert.deepEqual(calls, [])
+  await assert.rejects(controller.setModelContext('large', 1_000_000, 10), /busy/)
+  finish()
+  await logout
+  assert.deepEqual(calls, ['read', ADAPTER_KEY, MAIN_KEY])
 })
 
 test('auth module candidates find the pi-ai copy bundled inside a global DSH install', () => {
