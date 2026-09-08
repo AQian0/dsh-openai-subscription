@@ -276,7 +276,7 @@ class Harness {
   }
   all(tag: string): FakeNode[] { return [...this.nodes.values()].filter((node) => node.tag === tag) }
   button(label: string): FakeNode {
-    const node = this.all('button').find((item) => item.textContent.trim() === label)
+    const node = this.all('button').find((item) => item.props['aria-label'] === label || item.textContent.trim() === label)
     assert.ok(node, 'Missing button: ' + label + '\n' + this.text())
     return node
   }
@@ -287,8 +287,27 @@ class Harness {
     ;(button.props.onClick as () => void)()
     await this.flush()
   }
+  async keyOn(label: string, key: string): Promise<{ prevented: boolean; stopped: boolean }> {
+    const node = this.button(label)
+    node.focus()
+    const event = { key, prevented: false, stopped: false,
+      preventDefault() { this.prevented = true }, stopPropagation() { this.stopped = true } }
+    ;(node.props.onKeyDown as (event: unknown) => void)(event)
+    await this.flush()
+    return event
+  }
   async change(label: string, value: string): Promise<void> {
-    const node = [...this.nodes.values()].find((item) => (item.tag === 'select' || item.tag === 'input') && item.props['aria-label'] === label)
+    const picker = this.all('button').find((item) => item.props.role === 'combobox' && item.props['aria-label'] === label)
+    if (picker) {
+      if (!picker.props['aria-expanded']) await this.click(label)
+      const option = this.all('li').find((item) => item.props.role === 'option' && item.props['data-value'] === value)
+      assert.ok(option, 'Missing option: ' + value)
+      assert.equal(option.props['aria-disabled'], false)
+      ;(option.props.onClick as () => void)()
+      await this.flush()
+      return
+    }
+    const node = [...this.nodes.values()].find((item) => item.tag === 'input' && item.props['aria-label'] === label)
     assert.ok(node, 'Missing field: ' + label)
     assert.equal(node.disabled, false)
     ;(node.props.onChange as (event: unknown) => void)({ currentTarget: { value } })
@@ -398,7 +417,7 @@ test('header stays flush and secondary connection controls are collapsed by defa
       if (status.configured) {
         assert.ok(h.text().includes(h.translate('manage.refresh.help')))
         assert.ok(h.text().includes(h.translate('manage.disconnect.help')))
-        assert.equal(h.button('Disconnect').props.className, 'oasub-button', 'Destructive styling belongs to the confirmation only')
+        assert.equal(h.button('Disconnect').props.className, 'oasub-button danger-quiet', 'Use low-emphasis danger styling before confirmation')
       }
     } finally { h.dispose() }
   }
@@ -827,6 +846,74 @@ function withContexts(h: Harness): void {
   h.handlers.setModelContext = () => ok({ saved: true })
 }
 
+test('custom pickers support keyboard navigation, typeahead, Escape and Tab without implicit saves', async () => {
+  const h = await mount({ configure: withContexts })
+  try {
+    assert.equal(h.all('select').length, 0, 'Do not use platform-native dropdown styling')
+    await h.keyOn('Model', 'ArrowDown')
+    assert.equal(h.button('Model').props['aria-expanded'], true)
+    await h.keyOn('Model', 'End')
+    assert.equal(h.button('Model').props['aria-activedescendant'], 'oasub-model-option-2')
+    assert.equal(h.button('Model').props['data-value'], 'large-model')
+    const escape = await h.keyOn('Model', 'Escape')
+    assert.equal(escape.stopped, true, 'Escape must not dismiss the enclosing settings dialog')
+    assert.equal(h.button('Model').props['aria-expanded'], false)
+    await h.keyOn('Model', 's')
+    await h.keyOn('Model', 'Enter')
+    assert.equal(h.button('Model').props['data-value'], 'small-model')
+    await h.keyOn('Context window', ' ')
+    await h.keyOn('Context window', 'ArrowDown')
+    assert.equal(h.button('Context window').props['aria-activedescendant'], 'oasub-window-option-2', 'Skip disabled 1M')
+    await h.keyOn('Context window', 'Home')
+    assert.equal(h.button('Context window').props['aria-activedescendant'], 'oasub-window-option-0')
+    const tab = await h.keyOn('Context window', 'Tab')
+    assert.equal(tab.prevented, false, 'Tab must leave the combobox normally')
+    assert.equal(h.button('Context window').props['aria-expanded'], false)
+    assert.equal(h.calls.some((call) => call.method === 'setModelContext'), false)
+  } finally { h.dispose() }
+})
+
+test('pickers close on outside interaction and reload, and disabled options cannot be committed', async () => {
+  const h = await mount({ configure: withContexts })
+  try {
+    await h.change('Model', 'small-model')
+    await h.click('Context window')
+    const disabled = h.all('li').find((node) => node.props['data-value'] === 'million')!
+    ;(disabled.props.onClick as () => void)()
+    await h.flush()
+    assert.equal(h.button('Context window').props['data-value'], 'default')
+    h.document.dispatch('pointerdown', { target: h.button('Update models') })
+    await h.flush()
+    assert.equal(h.all('ul').length, 0)
+    await h.click('Model')
+    await h.reset()
+    assert.equal(h.button('Model').props['aria-expanded'], false)
+    await h.click('Model')
+    h.button('Connection management').focus()
+    await h.flush()
+    assert.equal(h.all('ul').length, 0)
+    assert.equal(h.calls.some((call) => call.method === 'setModelContext'), false)
+  } finally { h.dispose() }
+  assert.equal(h.document.listeners.get('pointerdown')?.size ?? 0, 0)
+  assert.equal(h.document.listeners.get('focusin')?.size ?? 0, 0)
+})
+
+test('connection management is a consistent disclosure card with an explicit control relationship', async () => {
+  const h = await mount({ configure: withContexts })
+  try {
+    const control = h.button('Connection management')
+    assert.equal(control.props.className, 'oasub-management-toggle')
+    assert.equal(control.props['aria-controls'], 'oasub-management')
+    assert.ok(h.all('section').some((node) => node.props.className === 'oasub-card oasub-management-card'))
+    assert.equal(h.all('div').find((node) => node.props.id === 'oasub-management')?.props.hidden, true)
+    await h.click('Connection management')
+    assert.equal(h.all('div').find((node) => node.props.id === 'oasub-management')?.props.hidden, false)
+    await h.click('Hide connection management')
+    assert.equal(h.all('button').some((node) => node.textContent === 'Disconnect'), false)
+    assert.equal(h.calls.some((call) => call.method === 'logout' || call.method === 'authorize'), false)
+  } finally { h.dispose() }
+})
+
 test('context defaults are read-only; explicit 1M selection saves only the selected model and revision', async () => {
   for (const language of ['en', 'zh']) {
     const h = await mount({ language, configure: withContexts })
@@ -852,7 +939,8 @@ test('context controls enforce known maxima and validate custom positive whole t
   const h = await mount({ configure: withContexts })
   try {
     await h.change('Model', 'small-model')
-    assert.equal(h.all('option').find((node) => node.props.value === 'million')?.disabled, true)
+    await h.click('Context window')
+    assert.equal(h.all('li').find((node) => node.props['data-value'] === 'million')?.props['aria-disabled'], true)
     await h.change('Context window', 'custom')
     for (const value of ['0', '-1', '1.5', '1e6', 'NaN', '9007199254740992', '128001']) {
       await h.change('Custom token count', value)
@@ -874,7 +962,7 @@ test('unknown limits allow explicit opt-in with a capability warning and model c
     assert.equal(h.all('button').some((node) => node.textContent === 'Save context'), false)
     await h.change('Context window', 'custom')
     await h.change('Custom token count', '1000000')
-    assert.equal(h.all('select').find((node) => node.props['aria-label'] === 'Context window')?.props.value, 'custom')
+    assert.equal(h.button('Context window').props['data-value'], 'custom')
     await h.change('Custom token count', '1000001')
     await h.click('Save context')
     assert.equal(h.calls.find((call) => call.method === 'setModelContext')?.args.modelId, 'unknown-limit')
@@ -931,7 +1019,7 @@ test('failed context reads clear stale editable controls and offer a retry', asy
     await h.change('Context window', 'million')
     h.handlers.getModelContexts = () => { throw new Error('SECRET_DIAGNOSTIC') }
     await h.reset()
-    assert.equal(h.all('select').length, 0)
+    assert.equal(h.all('button').filter((node) => node.props.role === 'combobox').length, 0)
     assert.equal(h.text().includes('SECRET_DIAGNOSTIC'), false)
     assert.ok(h.text().includes(h.translate('context.error')))
     delete h.handlers.getModelContexts

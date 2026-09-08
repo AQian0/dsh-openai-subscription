@@ -175,7 +175,12 @@ const ZH: Record<string, string> = {
   'context.model': '模型',
   'context.window': '上下文窗口',
   'context.default': '跟随模型默认',
-  'context.million': '1M · 1,000,000 tokens',
+  'context.million': '1M 大上下文',
+  'context.default.detail': '使用同步的模型配置',
+  'context.custom.detail': '手动设置 tokens 数',
+  'context.pending': '有未保存的更改',
+  'context.applied': '已保存',
+  'manage.help': '授权维护与本机连接',
   'context.custom': '自定义',
   'context.tokens': '自定义 tokens 数',
   'context.current': '当前：{count} tokens',
@@ -307,7 +312,12 @@ const EN: Record<string, string> = {
   'context.model': 'Model',
   'context.window': 'Context window',
   'context.default': 'Use model default',
-  'context.million': '1M · 1,000,000 tokens',
+  'context.million': '1M context',
+  'context.default.detail': 'Use the synced model setting',
+  'context.custom.detail': 'Set a token count manually',
+  'context.pending': 'Unsaved changes',
+  'context.applied': 'Saved',
+  'manage.help': 'Authorization and local connection',
   'context.custom': 'Custom',
   'context.tokens': 'Custom token count',
   'context.current': 'Current: {count} tokens',
@@ -520,16 +530,64 @@ window.__ModuleLoader__.load({
 .oasub-model-title { font-size: 13px; font-weight: 500; line-height: 19px; }
 .oasub-model-detail { color: var(--dsw-alias-label-tertiary, #81858c); font-size: 11px; line-height: 17px; }
 .oasub-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.oasub-management { display: flex; flex-direction: column; gap: 16px; border-top: 1px solid var(--dsw-alias-border-l2, rgba(15, 17, 21, .14)); padding-top: 16px; }
-.oasub-manage-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.oasub-manage-row > .oasub-button { flex: 0 0 auto; }
-.oasub-button.disclosure { border-color: transparent; border-radius: 8px; color: var(--dsw-alias-label-secondary, #61666b); padding: 4px 0; min-height: 32px; align-self: flex-start; }
-.oasub-context { display: flex; flex-direction: column; gap: 10px; }
-.oasub-field { display: flex; flex-direction: column; gap: 6px; flex: 1 1 180px; min-width: 0; font-size: 12px; }
+.oasub-wrap { container-type: inline-size; }
+.oasub-ui-icon { display: block; flex: none; }
+.oasub-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.oasub-section-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.oasub-context { display: flex; flex-direction: column; gap: 16px; }
+.oasub-context-grid { display: grid; grid-template-columns: 1.1fr 1fr; align-items: start; gap: 12px; }
+.oasub-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: 12px; font-weight: 500; }
 .oasub-context > .oasub-field { flex: none; }
-.oasub-select { width: 100%; min-height: 36px; border: 1px solid var(--oasub-control-border); border-radius: 8px; padding: 7px 10px; font: inherit; color: inherit; background: var(--dsw-alias-bg-layer-1, #fff); }
-.oasub-select:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #4176e6); outline-offset: 2px; }
-.oasub-select:disabled { opacity: .55; }
+.oasub-picker { position: relative; min-width: 0; }
+.oasub-picker-trigger, .oasub-input-shell {
+  width: 100%; min-height: 56px; padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l1, rgba(15, 17, 21, .2)); border-radius: 12px;
+  color: var(--dsw-alias-label-primary, #0f1115); background: var(--dsw-alias-bg-layer-2, #f5f6f7);
+}
+.oasub-picker-trigger { appearance: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; font: inherit; text-align: start; cursor: pointer; transition: border-color .16s, background .16s; }
+.oasub-picker-trigger:hover:not(:disabled), .oasub-picker-trigger[aria-expanded="true"] { border-color: var(--oasub-control-border); background: var(--dsw-alias-bg-layer-1, #fff); }
+.oasub-picker-trigger:focus-visible, .oasub-input-shell:focus-within, .oasub-management-toggle:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #4176e6); outline-offset: 3px; }
+.oasub-picker-trigger:disabled { opacity: .5; cursor: default; }
+.oasub-picker-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.oasub-picker-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; line-height: 19px; }
+.oasub-picker-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary, #61666b); font-size: 11px; font-weight: 400; line-height: 16px; font-variant-numeric: tabular-nums; }
+.oasub-chevron { color: var(--dsw-alias-label-secondary, #61666b); transition: transform .16s; }
+[aria-expanded="true"] > .oasub-chevron { transform: rotate(180deg); }
+.oasub-picker-menu { position: absolute; inset: calc(100% + 6px) 0 auto; z-index: 20; margin: 0; padding: 5px; max-height: 248px; overflow-y: auto; overscroll-behavior: contain; list-style: none; border: 1px solid var(--dsw-alias-border-l1, rgba(15, 17, 21, .2)); border-radius: 14px; background: var(--dsw-alias-bg-layer-1, #fff); box-shadow: 0 8px 28px rgba(0, 0, 0, .14); }
+.oasub-picker-option { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 48px; padding: 8px 10px; border-radius: 9px; cursor: pointer; }
+.oasub-picker-option[data-active="true"] { background: var(--dsw-alias-interactive-bg-hover, rgba(15, 17, 21, .06)); }
+.oasub-picker-option[aria-selected="true"] .oasub-picker-label { font-weight: 600; }
+.oasub-picker-option[aria-disabled="true"] { opacity: .4; cursor: not-allowed; }
+.oasub-input-shell { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+.oasub-input-shell:has(input:disabled) { opacity: .5; }
+.oasub-input-shell:has([aria-invalid="true"]) { border-color: var(--dsw-alias-state-error-primary, #dc2626); }
+.oasub-token-input { appearance: none; width: 100%; min-width: 0; padding: 0; border: 0; outline: none; background: transparent; color: inherit; font: inherit; font-size: 14px; line-height: 22px; font-variant-numeric: tabular-nums; }
+.oasub-token-unit { color: var(--dsw-alias-label-tertiary, #81858c); font-size: 12px; font-weight: 400; }
+.oasub-context-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--dsw-alias-label-secondary, #61666b); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; }
+.oasub-context-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 6px; background: var(--dsw-alias-bg-layer-2, #f5f6f7); font-size: 10px; }
+.oasub-context-note { display: flex; align-items: flex-start; gap: 7px; color: var(--dsw-alias-label-tertiary, #81858c); font-size: 11px; line-height: 17px; }
+.oasub-context-note > svg { margin-top: 2px; }
+.oasub-context-error { color: var(--dsw-alias-state-error-primary, #b91c1c); font-size: 12px; line-height: 18px; }
+.oasub-context-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-top: 14px; border-top: 1px solid var(--dsw-alias-border-l2, rgba(15, 17, 21, .14)); }
+.oasub-management-card { padding: 0; gap: 0; }
+.oasub-management-heading { margin: 0; font: inherit; }
+.oasub-management-toggle { appearance: none; display: flex; align-items: center; gap: 12px; width: 100%; padding: var(--oasub-section-inset); border: 0; border-radius: 16px; color: inherit; background: transparent; font: inherit; text-align: start; cursor: pointer; transition: background .16s; }
+.oasub-management-toggle:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(15, 17, 21, .04)); }
+.oasub-management-toggle > .oasub-section-copy { flex: 1; }
+.oasub-management-symbol { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border-radius: 10px; color: var(--dsw-alias-label-secondary, #61666b); background: var(--dsw-alias-bg-layer-2, #f5f6f7); }
+.oasub-management { display: flex; flex-direction: column; margin-inline: var(--oasub-section-inset); }
+.oasub-management[hidden] { display: none; }
+.oasub-manage-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-block: 16px; border-top: 1px solid var(--dsw-alias-border-l2, rgba(15, 17, 21, .14)); }
+.oasub-manage-row .oasub-status-detail { font-size: 11px; line-height: 17px; }
+.oasub-manage-title { font-size: 13px; font-weight: 500; line-height: 20px; }
+.oasub-manage-row > .oasub-button { flex: 0 0 auto; min-height: 32px; padding: 5px 12px; border-color: var(--dsw-alias-border-l1, rgba(15, 17, 21, .2)); font-size: 12px; }
+.oasub-manage-row > .oasub-button.danger-quiet { color: var(--dsw-alias-state-error-primary, #b91c1c); border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #dc2626) 25%, transparent); }
+.oasub-manage-row > .oasub-button.danger-quiet:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #dc2626) 7%, transparent); border-color: var(--dsw-alias-state-error-primary, #dc2626); }
+@container (max-width: 460px) {
+  .oasub-context-grid { grid-template-columns: minmax(0, 1fr); }
+  .oasub-manage-row { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .oasub-manage-row > .oasub-button { align-self: flex-start; }
+}
 .oasub-button {
   appearance: none;
   min-height: 36px;
@@ -605,6 +663,9 @@ window.__ModuleLoader__.load({
   .oasub-manage-row { align-items: flex-start; flex-direction: column; gap: 8px; }
 }
 @media (forced-colors: active) {
+  .oasub-picker-trigger, .oasub-input-shell, .oasub-picker-menu { border-color: ButtonText; }
+  .oasub-picker-option[data-active="true"] { outline: 1px solid Highlight; outline-offset: -1px; }
+  .oasub-picker-option[aria-disabled="true"], .oasub-picker-trigger:disabled { color: GrayText; opacity: 1; }
   .oasub-button { border-color: ButtonText; }
   .oasub-button.primary, .oasub-button.danger { border-color: ButtonText; color: ButtonText; background: ButtonFace; }
   .oasub-button:not(.primary):not(.danger):hover:not(:disabled),
@@ -613,7 +674,7 @@ window.__ModuleLoader__.load({
   .oasub-button:disabled { border-color: GrayText; color: GrayText; opacity: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .oasub-button { transition: none; }
+  .oasub-button, .oasub-picker-trigger, .oasub-chevron, .oasub-management-toggle { transition: none; }
   .oasub-skeleton::after { animation: none; display: none; }
 }
 `
@@ -827,6 +888,20 @@ window.__ModuleLoader__.load({
       }
     }
 
+    function uiIcon(name: 'chevron' | 'check' | 'info' | 'settings', size = 16): ReactElement {
+      const paths = {
+        chevron: 'm6 9 6 6 6-6', check: 'm5 12 4 4L19 6',
+        info: 'M12 11v6m0-10v.01M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
+        settings: 'M4 7h9m4 0h3M4 17h3m4 0h9M13 4v6M7 14v6',
+      }
+      return React.createElement('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
+        stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round',
+        className: 'oasub-ui-icon' + (name === 'chevron' ? ' oasub-chevron' : ''), 'aria-hidden': true, focusable: false,
+      }, React.createElement('path', { d: paths[name] }))
+    }
+
+    interface PickerOption { value: string; label: string; detail?: string; disabled?: boolean }
+    interface PickerState { id: string; active: number }
     type Phase = 'idle' | 'starting' | 'authorizing' | 'paused' | 'syncing' | 'disconnecting' | 'saving-context'
     type ConfirmAction = 'sync' | 'disconnect' | null
     interface ToastState {
@@ -864,6 +939,10 @@ window.__ModuleLoader__.load({
       // null means no pending edit; '' selects the synchronized model default.
       const [contextDraft, setContextDraft] = React.useState<string | null>(null)
       const [contextChoice, setContextChoice] = React.useState<'default' | 'million' | 'custom' | null>(null)
+      const [picker, setPicker] = React.useState<PickerState | null>(null)
+      const pickerRoot = React.useRef<HTMLElement | null>(null)
+      const activeOption = React.useRef<HTMLElement | null>(null)
+      const pickerSearch = React.useRef({ text: '', at: 0 })
       const actionLock = React.useRef(false)
       const cancelAcknowledged = React.useRef(false)
       const flowObserved = React.useRef(false)
@@ -938,6 +1017,28 @@ window.__ModuleLoader__.load({
         }).finally(() => { if (!controller.signal.aborted) setContextLoading(false) })
         return () => controller.abort()
       }, [connection, configured, statusRevision])
+
+      const contextDisabled = busy || contextLoading || statusLoading
+      React.useEffect(() => {
+        if (contextDisabled || !configured) setPicker(null)
+      }, [contextDisabled, configured, contexts])
+
+      React.useEffect(() => {
+        if (!picker || typeof document === 'undefined') return
+        const dismissOutside = (event: Event) => {
+          if (!pickerRoot.current?.contains(event.target as Node)) setPicker(null)
+        }
+        document.addEventListener('pointerdown', dismissOutside)
+        document.addEventListener('focusin', dismissOutside)
+        return () => {
+          document.removeEventListener('pointerdown', dismissOutside)
+          document.removeEventListener('focusin', dismissOutside)
+        }
+      }, [picker?.id])
+
+      React.useEffect(() => {
+        activeOption.current?.scrollIntoView?.({ block: 'nearest' })
+      }, [picker?.id, picker?.active])
 
       React.useEffect(() => {
         if (props.subscribeReset === undefined) return
@@ -1237,6 +1338,76 @@ window.__ModuleLoader__.load({
           if (!signal.aborted) { actionLock.current = false; changePhase('idle'); reloadStatus() }
         })
       }
+      // Select-only combobox: focus stays on the trigger, and navigation never saves a value.
+      const renderPicker = (id: string, label: string, value: string, options: PickerOption[], choose: (value: string) => void, describedBy?: string) => {
+        const open = picker?.id === id && !contextDisabled
+        const selected = options.find((option) => option.value === value)
+        const enabled = options.map((option, index) => option.disabled ? -1 : index).filter((index) => index >= 0)
+        const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value && !option.disabled))
+        const active = open ? picker.active : selectedIndex
+        const optionId = (index: number) => id + '-option-' + index
+        const commit = (index: number) => {
+          const option = options[index]
+          if (!option || option.disabled || contextDisabled) return
+          choose(option.value)
+          setPicker(null)
+        }
+        const onKeyDown = (event: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; preventDefault(): void; stopPropagation(): void }) => {
+          if (contextDisabled) return
+          if (event.key === 'Escape' && open) {
+            event.preventDefault(); event.stopPropagation(); setPicker(null); return
+          }
+          if (event.key === 'Tab') { setPicker(null); return }
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            if (open) commit(active)
+            else { pickerSearch.current.text = ''; setPicker({ id, active: selectedIndex }) }
+            return
+          }
+          const direction = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0
+          if (direction || event.key === 'Home' || event.key === 'End') {
+            event.preventDefault()
+            const position = enabled.indexOf(active)
+            const next = event.key === 'Home' ? enabled[0] : event.key === 'End' ? enabled.at(-1)
+              : !open ? selectedIndex : enabled[(position + direction + enabled.length) % enabled.length]
+            setPicker({ id, active: next ?? 0 })
+            return
+          }
+          if (event.key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey) {
+            event.preventDefault()
+            const search = pickerSearch.current
+            search.text = (Date.now() - search.at > 700 ? '' : search.text) + event.key.toLocaleLowerCase()
+            search.at = Date.now()
+            const text = [...search.text].every((char) => char === search.text[0]) ? search.text[0]! : search.text
+            const order = [...enabled.filter((index) => index > active), ...enabled.filter((index) => index <= active)]
+            const match = order.find((index) => options[index]!.label.toLocaleLowerCase().startsWith(text) || options[index]!.value.toLocaleLowerCase().startsWith(text))
+            if (match !== undefined) setPicker({ id, active: match })
+          }
+        }
+        const copy = (option: PickerOption | undefined) => el('span', { className: 'oasub-picker-copy' },
+          el('span', { className: 'oasub-picker-label' }, option?.label ?? value),
+          option?.detail ? el('span', { className: 'oasub-picker-detail' }, option.detail) : null,
+        )
+        return el('div', { className: 'oasub-field' },
+          el('label', { id: id + '-label', htmlFor: id }, label),
+          el('div', { className: 'oasub-picker', ref: open ? pickerRoot : undefined },
+            el('button', { id, type: 'button', className: 'oasub-picker-trigger', role: 'combobox',
+              'aria-label': label, 'aria-expanded': open, 'aria-haspopup': 'listbox',
+              'aria-controls': open ? id + '-list' : undefined, 'aria-activedescendant': open ? optionId(active) : undefined,
+              'aria-describedby': describedBy, disabled: contextDisabled, 'data-value': value,
+              onKeyDown, onClick: () => { pickerSearch.current.text = ''; setPicker(open ? null : { id, active: selectedIndex }) },
+            }, copy(selected), uiIcon('chevron')),
+            open ? el('ul', { id: id + '-list', className: 'oasub-picker-menu', role: 'listbox', 'aria-labelledby': id + '-label',
+              onMouseDown: (event: { preventDefault(): void }) => event.preventDefault(),
+            }, options.map((option, index) => el('li', { key: option.value, id: optionId(index), role: 'option',
+              className: 'oasub-picker-option', 'aria-selected': option.value === value, 'aria-disabled': !!option.disabled,
+              'data-value': option.value, 'data-active': index === active, ref: index === active ? activeOption : undefined,
+              onMouseMove: () => { if (!option.disabled && index !== active) setPicker({ id, active: index }) },
+              onClick: () => commit(index),
+            }, copy(option), option.value === value ? uiIcon('check', 15) : null))) : null,
+          ),
+        )
+      }
       const selectCode = () => {
         codeRef.current?.focus()
         codeRef.current?.select()
@@ -1330,48 +1501,54 @@ window.__ModuleLoader__.load({
         ),
         statusCard,
         configured ? el('section', { className: 'oasub-card oasub-context', 'aria-labelledby': 'oasub-context-title' },
-          el('div', { id: 'oasub-context-title', className: 'oasub-status-title' }, t('context.title')),
-          el('div', { className: 'oasub-status-detail' }, t('context.help')),
+          el('div', { className: 'oasub-section-heading' },
+            el('div', { className: 'oasub-section-copy' },
+              el('div', { id: 'oasub-context-title', className: 'oasub-status-title' }, t('context.title')),
+              el('div', { className: 'oasub-status-detail' }, t('context.help')),
+            ),
+          ),
           contextLoading ? el('div', { role: 'status', className: 'oasub-status-detail' }, t('context.loading')) : null,
           contextError ? el('div', { role: 'alert', className: 'oasub-notice error' },
             t(contextError), el('button', { type: 'button', className: 'oasub-button quiet', disabled: contextLoading, onClick: reloadStatus }, t('action.retry')),
           ) : null,
           !contextLoading && contexts?.models.length === 0 ? el('div', { className: 'oasub-status-detail' }, t('context.empty')) : null,
           selectedModel ? el('div', { className: 'oasub-context' },
-            el('div', { className: 'oasub-actions' },
-              el('label', { className: 'oasub-field' }, t('context.model'),
-                el('select', { className: 'oasub-select', 'aria-label': t('context.model'), value: modelId, disabled: busy || contextLoading || statusLoading,
-                  onChange: (event: { currentTarget: HTMLSelectElement }) => { setModelId(event.currentTarget.value); setContextDraft(null); setContextChoice(null) } },
-                  contexts?.models.map((model) => el('option', { key: model.id, value: model.id }, model.name && model.name !== model.id ? model.name + ' (' + model.id + ')' : model.id))),
-              ),
-              el('label', { className: 'oasub-field' }, t('context.window'),
-                el('select', { className: 'oasub-select', 'aria-label': t('context.window'), value: contextMode, disabled: busy || contextLoading || statusLoading,
-                  'aria-describedby': 'oasub-context-limit',
-                  onChange: (event: { currentTarget: HTMLSelectElement }) => {
-                    const choice = event.currentTarget.value === 'default' ? 'default' : event.currentTarget.value === 'million' ? 'million' : 'custom'
-                    setContextChoice(choice)
-                    setContextDraft(choice === 'default' ? '' : choice === 'million' ? '1000000' : '-')
-                  } },
-                  el('option', { value: 'default' }, t('context.default') + (selectedModel.defaultContextWindow ? ' · ' + selectedModel.defaultContextWindow.toLocaleString() : '')),
-                  el('option', { value: 'million', disabled: selectedModel.maxContextWindow !== undefined && selectedModel.maxContextWindow < 1_000_000 }, t('context.million')),
-                  el('option', { value: 'custom' }, t('context.custom')),
-                ),
-              ),
+            el('div', { className: 'oasub-context-grid' },
+              renderPicker('oasub-model', t('context.model'), modelId, (contexts?.models ?? []).map((model) => ({
+                value: model.id, label: model.name || model.id,
+                detail: model.name && model.name !== model.id ? model.id : undefined,
+              })), (value) => { setModelId(value); setContextDraft(null); setContextChoice(null) }),
+              renderPicker('oasub-window', t('context.window'), contextMode, [
+                { value: 'default', label: t('context.default'), detail: selectedModel.defaultContextWindow ? selectedModel.defaultContextWindow.toLocaleString() + ' tokens' : t('context.default.detail') },
+                { value: 'million', label: t('context.million'), detail: '1,000,000 tokens', disabled: selectedModel.maxContextWindow !== undefined && selectedModel.maxContextWindow < 1_000_000 },
+                { value: 'custom', label: t('context.custom'), detail: t('context.custom.detail') },
+              ], (value) => {
+                const choice = value === 'default' ? 'default' : value === 'million' ? 'million' : 'custom'
+                setContextChoice(choice)
+                setContextDraft(choice === 'default' ? '' : choice === 'million' ? '1000000' : '-')
+              }, 'oasub-context-limit'),
             ),
             contextMode === 'custom' ? el('label', { className: 'oasub-field' }, t('context.tokens'),
-              el('input', { className: 'oasub-select', type: 'text', inputMode: 'numeric', 'aria-label': t('context.tokens'),
-                value: draft === '-' ? '' : draft, disabled: busy || contextLoading || statusLoading,
-                'aria-invalid': contextValidation !== null, 'aria-describedby': 'oasub-context-limit',
-                onChange: (event: { currentTarget: HTMLInputElement }) => setContextDraft(event.currentTarget.value || '-') }),
+              el('span', { className: 'oasub-input-shell' },
+                el('input', { className: 'oasub-token-input', type: 'text', inputMode: 'numeric', 'aria-label': t('context.tokens'),
+                  value: draft === '-' ? '' : draft, disabled: contextDisabled, placeholder: '1000000',
+                  'aria-invalid': contextValidation !== null, 'aria-describedby': 'oasub-context-limit' + (contextDirty && contextValidation ? ' oasub-context-error' : ''),
+                  onChange: (event: { currentTarget: HTMLInputElement }) => setContextDraft(event.currentTarget.value || '-') }),
+                el('span', { className: 'oasub-token-unit', 'aria-hidden': true }, 'tokens'),
+              ),
             ) : null,
-            selectedModel.contextWindow ? el('div', { className: 'oasub-status-detail' }, t('context.current', { count: selectedModel.contextWindow.toLocaleString() })) : null,
-            el('div', { id: 'oasub-context-limit', className: 'oasub-status-detail' },
-              selectedModel.maxContextWindow ? t('context.maximum', { count: selectedModel.maxContextWindow.toLocaleString() }) + ' · ' + t('context.limit.help') : t('context.unknown')),
-            contextDirty && contextValidation ? el('div', { role: 'alert', className: 'oasub-status-detail' }, t(contextValidation)) : null,
-            contextDirty ? el('div', { className: 'oasub-actions' },
-              el('button', { type: 'button', className: 'oasub-button primary', disabled: busy || contextLoading || statusLoading || contextValidation !== null,
-                onClick: saveContext }, t(phase === 'saving-context' ? 'context.saving' : 'context.save')),
-            ) : null,
+            el('div', { id: 'oasub-context-limit', className: 'oasub-context-note' }, uiIcon('info', 13),
+              el('span', null, selectedModel.maxContextWindow ? t('context.maximum', { count: selectedModel.maxContextWindow.toLocaleString() }) + ' · ' + t('context.limit.help') : t('context.unknown'))),
+            contextDirty && contextValidation ? el('div', { id: 'oasub-context-error', role: 'alert', className: 'oasub-context-error' }, t(contextValidation)) : null,
+            el('div', { className: 'oasub-context-footer' },
+              el('div', { className: 'oasub-context-meta' },
+                selectedModel.contextWindow ? el('span', null, t('context.current', { count: selectedModel.contextWindow.toLocaleString() })) : null,
+                contextDirty ? el('span', { className: 'oasub-context-badge' }, t('context.pending'))
+                  : selectedModel.customized ? el('span', { className: 'oasub-context-badge' }, uiIcon('check', 12), t('context.applied')) : null,
+              ),
+              contextDirty ? el('button', { type: 'button', className: 'oasub-button primary', disabled: contextDisabled || contextValidation !== null,
+                onClick: saveContext }, t(phase === 'saving-context' ? 'context.saving' : 'context.save')) : null,
+            ),
           ) : null,
         ) : null,
         statusError !== null
@@ -1379,30 +1556,52 @@ window.__ModuleLoader__.load({
               t(statusError), info !== null ? ' ' + t('status.stale') : null,
               el('button', { type: 'button', className: 'oasub-button quiet', disabled: statusLoading, onClick: reloadStatus }, t('action.retry')),
             ) : null,
-        el('button', { ref: reloadRef, type: 'button', className: 'oasub-button disclosure',
-          'aria-expanded': managementOpen, 'aria-controls': managementOpen ? 'oasub-management' : undefined,
-          onClick: () => setManagementOpen((open) => !open) },
-          t(managementOpen ? 'action.less' : 'action.more')),
-        managementOpen ? el('section', { id: 'oasub-management', className: 'oasub-management', 'aria-label': t('action.more') },
-          configured && info?.credentialState === 'valid' ? el('div', { className: 'oasub-manage-row' },
-            el('div', { className: 'oasub-status-detail', id: 'oasub-refresh-help' }, t(info.refreshable ? 'manage.refresh.help' : 'manage.reconnect.help')),
-            el('button', { type: 'button', className: 'oasub-button', disabled: busy || !ready,
-              'aria-describedby': 'oasub-refresh-help',
-              onClick: () => startAuthorization(info.refreshable ? 'refresh' : 'device_code') },
-              phase === 'starting' || phase === 'authorizing' ? t('action.refreshing') : t(info.refreshable ? 'action.refresh' : 'action.reconnect')),
-          ) : null,
-          el('div', { className: 'oasub-manage-row' },
-            el('div', { className: 'oasub-status-detail', id: 'oasub-reload-help' }, t('manage.reload.help')),
-            el('button', { type: 'button', className: 'oasub-button', disabled: statusLoading,
-              'aria-describedby': 'oasub-reload-help', onClick: reloadStatus }, t(statusLoading ? 'status.reloading' : 'action.reload')),
+        el('section', { className: 'oasub-card oasub-management-card', 'aria-label': t('action.more') },
+          el('h3', { className: 'oasub-management-heading' },
+            el('button', { ref: reloadRef, type: 'button', className: 'oasub-management-toggle',
+              'aria-label': t(managementOpen ? 'action.less' : 'action.more'),
+              'aria-expanded': managementOpen, 'aria-controls': 'oasub-management',
+              onClick: () => setManagementOpen((open) => !open) },
+              el('span', { className: 'oasub-management-symbol' }, uiIcon('settings', 18)),
+              el('span', { className: 'oasub-section-copy' },
+                el('span', { className: 'oasub-status-title' }, t('action.more')),
+                el('span', { className: 'oasub-status-detail' }, t('manage.help')),
+              ),
+              uiIcon('chevron'),
+            ),
           ),
-          info?.cleanupAvailable ? el('div', { className: 'oasub-manage-row' },
-            el('div', { className: 'oasub-status-detail', id: 'oasub-disconnect-help' }, t('manage.disconnect.help')),
-            el('button', { type: 'button', className: 'oasub-button', disabled: busy,
-              'aria-describedby': 'oasub-disconnect-help', onClick: () => openConfirm('disconnect') },
-              t(phase === 'disconnecting' ? 'action.disconnecting' : 'action.disconnect')),
-          ) : null,
-        ) : null,
+          el('div', { id: 'oasub-management', className: 'oasub-management', hidden: !managementOpen },
+            managementOpen ? [
+              configured && info?.credentialState === 'valid' ? el('div', { key: 'refresh', className: 'oasub-manage-row' },
+                el('div', { className: 'oasub-section-copy' },
+                  el('div', { className: 'oasub-manage-title' }, t(info.refreshable ? 'action.refresh' : 'action.reconnect')),
+                  el('div', { className: 'oasub-status-detail', id: 'oasub-refresh-help' }, t(info.refreshable ? 'manage.refresh.help' : 'manage.reconnect.help')),
+                ),
+                el('button', { type: 'button', className: 'oasub-button', disabled: busy || !ready,
+                  'aria-describedby': 'oasub-refresh-help',
+                  onClick: () => startAuthorization(info.refreshable ? 'refresh' : 'device_code') },
+                  phase === 'starting' || phase === 'authorizing' ? t('action.refreshing') : t(info.refreshable ? 'action.refresh' : 'action.reconnect')),
+              ) : null,
+              el('div', { key: 'reload', className: 'oasub-manage-row' },
+                el('div', { className: 'oasub-section-copy' },
+                  el('div', { className: 'oasub-manage-title' }, t('action.reload')),
+                  el('div', { className: 'oasub-status-detail', id: 'oasub-reload-help' }, t('manage.reload.help')),
+                ),
+                el('button', { type: 'button', className: 'oasub-button', disabled: statusLoading,
+                  'aria-describedby': 'oasub-reload-help', onClick: reloadStatus }, t(statusLoading ? 'status.reloading' : 'action.reload')),
+              ),
+              info?.cleanupAvailable ? el('div', { key: 'disconnect', className: 'oasub-manage-row' },
+                el('div', { className: 'oasub-section-copy' },
+                  el('div', { className: 'oasub-manage-title' }, t('action.disconnect')),
+                  el('div', { className: 'oasub-status-detail', id: 'oasub-disconnect-help' }, t('manage.disconnect.help')),
+                ),
+                el('button', { type: 'button', className: 'oasub-button danger-quiet', disabled: busy,
+                  'aria-describedby': 'oasub-disconnect-help', onClick: () => openConfirm('disconnect') },
+                  t(phase === 'disconnecting' ? 'action.disconnecting' : 'action.disconnect')),
+              ) : null,
+            ] : null,
+          ),
+        ),
         device !== null
           ? el('section', { className: 'oasub-card oasub-device', 'aria-label': t('device.title') },
               el('div', { className: 'oasub-device-head' },
