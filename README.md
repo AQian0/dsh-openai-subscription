@@ -137,7 +137,7 @@ After installing dependencies, run `npm run check` (or `pnpm run check`) for typ
 
 ### Settings UI and navigation icons
 
-Buttons use theme-aware, high-contrast `1px` borders. The header and navigation reuse one local OpenAI SVG, with no additional runtime dependency or remote image requests; see [third-party notices](THIRD_PARTY_NOTICES.md).
+Every button, picker, and code field shares one control spec: a theme-aware `1px` border taken from the host's own control border step, a `12px` radius, and the host's type scale. Variants change color only, never size or shape. The header and navigation reuse one local OpenAI SVG, with no additional runtime dependency or remote image requests; see [third-party notices](THIRD_PARTY_NOTICES.md).
 
 The currently tested upstream DSH build does not expose custom settings navigation icons. Unextended hosts keep the default gear without affecting other plugin features. This project includes an **opt-in, build-guarded, reversible** local DSH extension; installing the plugin does not patch the host automatically. It preserves string labels and passes icons through `icon({ size, className })`, not DOM/CSS substitution. See [DSH settings icon extension](docs/DSH_SETTINGS_ICONS.md) for usage and upgrade caveats.
 

@@ -462,9 +462,10 @@ window.__ModuleLoader__.load({
 .oasub-wrap {
   --oasub-section-inset: 20px;
   --oasub-card-border-width: 1px;
-  /* Control boundaries need more contrast than the host's decorative hairlines. */
-  --oasub-control-border: color-mix(in srgb, var(--dsw-alias-label-primary, #0f1115) 48%, transparent);
-  --oasub-control-border-hover: color-mix(in srgb, var(--dsw-alias-label-primary, #0f1115) 68%, transparent);
+  /* One control boundary for every button and picker: the host's own control
+     border step, so plugin controls carry the same weight as DSH's. */
+  --oasub-control-border: var(--dsw-alias-border-l3, rgba(15, 17, 21, .16));
+  --oasub-control-border-hover: var(--dsw-alias-border-l4, rgba(15, 17, 21, .2));
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -541,11 +542,11 @@ window.__ModuleLoader__.load({
 .oasub-picker { position: relative; min-width: 0; }
 .oasub-picker-trigger, .oasub-input-shell {
   width: 100%; min-height: 56px; padding: 10px 12px;
-  border: 1px solid var(--dsw-alias-border-l1, rgba(15, 17, 21, .2)); border-radius: 12px;
+  border: 1px solid var(--oasub-control-border); border-radius: 12px;
   color: var(--dsw-alias-label-primary, #0f1115); background: var(--dsw-alias-bg-layer-2, #f5f6f7);
 }
 .oasub-picker-trigger { appearance: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; font: inherit; text-align: start; cursor: pointer; transition: border-color .16s, background .16s; }
-.oasub-picker-trigger:hover:not(:disabled), .oasub-picker-trigger[aria-expanded="true"] { border-color: var(--oasub-control-border); background: var(--dsw-alias-bg-layer-1, #fff); }
+.oasub-picker-trigger:hover:not(:disabled), .oasub-picker-trigger[aria-expanded="true"] { border-color: var(--oasub-control-border-hover); background: var(--dsw-alias-bg-layer-1, #fff); }
 .oasub-picker-trigger:focus-visible, .oasub-input-shell:focus-within, .oasub-management-toggle:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #4176e6); outline-offset: 3px; }
 .oasub-picker-trigger:disabled { opacity: .5; cursor: default; }
 .oasub-picker-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -580,39 +581,46 @@ window.__ModuleLoader__.load({
 .oasub-manage-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-block: 16px; border-top: 1px solid var(--dsw-alias-border-l2, rgba(15, 17, 21, .14)); }
 .oasub-manage-row .oasub-status-detail { font-size: 11px; line-height: 17px; }
 .oasub-manage-title { font-size: 13px; font-weight: 500; line-height: 20px; }
-.oasub-manage-row > .oasub-button { flex: 0 0 auto; min-height: 32px; padding: 5px 12px; border-color: var(--dsw-alias-border-l1, rgba(15, 17, 21, .2)); font-size: 12px; }
-.oasub-manage-row > .oasub-button.danger-quiet { color: var(--dsw-alias-state-error-primary, #b91c1c); border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #dc2626) 25%, transparent); }
-.oasub-manage-row > .oasub-button.danger-quiet:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #dc2626) 7%, transparent); border-color: var(--dsw-alias-state-error-primary, #dc2626); }
+/* Management rows reuse the one button spec; only the row layout differs. */
+.oasub-manage-row > .oasub-button { flex: none; }
 @container (max-width: 460px) {
   .oasub-context-grid { grid-template-columns: minmax(0, 1fr); }
   .oasub-manage-row { align-items: flex-start; flex-direction: column; gap: 10px; }
   .oasub-manage-row > .oasub-button { align-self: flex-start; }
 }
+/* One button spec for the whole panel: DSH's control radius, control border
+   step, and type scale. Variants change color only, never size or shape. */
 .oasub-button {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 36px;
-  padding: 7px 15px;
+  padding: 0 16px;
   border: 1px solid var(--oasub-control-border);
-  border-radius: 999px;
+  border-radius: 12px;
   color: var(--dsw-alias-label-primary, #0f1115);
   background: transparent;
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
-  line-height: 20px;
+  line-height: 22px;
   cursor: pointer;
   text-decoration: none;
   text-align: center;
   transition: background .16s ease, border-color .16s ease, opacity .16s ease, transform .16s ease;
 }
-.oasub-button:not(.primary):not(.danger):hover:not(:disabled) { border-color: var(--oasub-control-border-hover); background: var(--dsw-alias-interactive-bg-hover, rgba(15, 17, 21, .06)); }
+.oasub-button:not(.primary):not(.danger):not(.danger-quiet):hover:not(:disabled) { border-color: var(--oasub-control-border-hover); background: var(--dsw-alias-interactive-bg-hover, rgba(15, 17, 21, .06)); }
 .oasub-button:active:not(:disabled) { transform: translateY(1px); }
 .oasub-button:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #4176e6); outline-offset: 2px; }
 .oasub-button:disabled { cursor: default; opacity: .45; }
-.oasub-button.primary { border-color: var(--dsw-alias-brand-primary, #4176e6); color: var(--dsw-alias-label-primary-inverted, #fff); background: var(--dsw-alias-brand-primary, #4176e6); }
-.oasub-button.primary:hover:not(:disabled) { filter: brightness(.96); }
-.oasub-button.danger { border-color: var(--dsw-alias-state-error-primary, #dc2626); color: var(--dsw-alias-label-primary-inverted, #fff); background: var(--dsw-alias-state-error-primary, #dc2626); }
+.oasub-button.primary { border-color: var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary, #4176e6)); color: var(--dsw-alias-label-primary-foreground, #fff); background: var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary, #4176e6)); }
+.oasub-button.primary:hover:not(:disabled) { border-color: var(--dsw-alias-button-primary-hover, var(--dsw-alias-brand-primary, #4176e6)); background: var(--dsw-alias-button-primary-hover, var(--dsw-alias-brand-primary, #4176e6)); }
+.oasub-button.danger { border-color: var(--dsw-alias-state-error-primary, #dc2626); color: var(--dsw-alias-label-primary-foreground, #fff); background: var(--dsw-alias-state-error-primary, #dc2626); }
 .oasub-button.danger:hover:not(:disabled) { filter: brightness(.94); }
+.oasub-button.danger-quiet { color: var(--dsw-alias-state-error-primary, #b91c1c); border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #dc2626) 25%, transparent); }
+.oasub-button.danger-quiet:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-danger, color-mix(in srgb, var(--dsw-alias-state-error-primary, #dc2626) 7%, transparent)); border-color: var(--dsw-alias-state-error-primary, #dc2626); }
 .oasub-button.quiet { margin-left: auto; }
 .oasub-notice {
   display: flex;
@@ -635,10 +643,10 @@ window.__ModuleLoader__.load({
   align-self: flex-start;
   width: min(100%, 24ch);
   min-width: 0;
-  border: 1px solid var(--dsw-alias-border-l1, rgba(15, 17, 21, .2));
+  border: 1px solid var(--oasub-control-border);
   margin: 0;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: 12px;
   color: var(--dsw-alias-label-primary, #0f1115);
   background: var(--dsw-alias-bg-layer-2, #f5f6f7);
   font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
@@ -667,9 +675,10 @@ window.__ModuleLoader__.load({
   .oasub-picker-option[data-active="true"] { outline: 1px solid Highlight; outline-offset: -1px; }
   .oasub-picker-option[aria-disabled="true"], .oasub-picker-trigger:disabled { color: GrayText; opacity: 1; }
   .oasub-button { border-color: ButtonText; }
-  .oasub-button.primary, .oasub-button.danger { border-color: ButtonText; color: ButtonText; background: ButtonFace; }
-  .oasub-button:not(.primary):not(.danger):hover:not(:disabled),
-  .oasub-button.primary:hover:not(:disabled), .oasub-button.danger:hover:not(:disabled) { border-color: Highlight; filter: none; }
+  .oasub-button.primary, .oasub-button.danger, .oasub-button.danger-quiet { border-color: ButtonText; color: ButtonText; background: ButtonFace; }
+  .oasub-button:not(.primary):not(.danger):not(.danger-quiet):hover:not(:disabled),
+  .oasub-button.primary:hover:not(:disabled), .oasub-button.danger:hover:not(:disabled),
+  .oasub-button.danger-quiet:hover:not(:disabled) { border-color: Highlight; filter: none; }
   .oasub-button:focus-visible { outline-color: Highlight; }
   .oasub-button:disabled { border-color: GrayText; color: GrayText; opacity: 1; }
 }
@@ -1469,7 +1478,9 @@ window.__ModuleLoader__.load({
               configured
                 ? el('button', {
                     type: 'button',
-                    className: 'oasub-button ' + (info.modelsSynced ? '' : 'primary'),
+                    // Exactly one primary action per card: a pending credential
+                    // repair outranks the model sync action.
+                    className: 'oasub-button' + (info.modelsSynced || info.credentialState !== 'valid' ? '' : ' primary'),
                     disabled: busy,
                     'aria-describedby': 'oasub-sync-help',
                     onClick: requestModelSync,

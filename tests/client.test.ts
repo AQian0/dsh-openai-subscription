@@ -382,14 +382,63 @@ test('outlined controls use visible full-pixel theme-aware borders without overr
     const css = h.document.styles.map((style) => style.textContent).join('\n')
     const button = css.match(/^\.oasub-button \{([^}]+)\}/m)?.[1] ?? ''
     assert.match(button, /border: 1px solid var\(--oasub-control-border\)/)
-    assert.match(css, /--oasub-control-border: color-mix\(in srgb, var\(--dsw-alias-label-primary, #0f1115\) 48%, transparent\)/)
-    assert.match(css, /\.oasub-button:not\(\.primary\):not\(\.danger\):hover:not\(:disabled\)/)
+    assert.match(css, /--oasub-control-border: var\(--dsw-alias-border-l3, rgba\(15, 17, 21, \.16\)\)/)
+    assert.match(css, /\.oasub-button:not\(\.primary\):not\(\.danger\):not\(\.danger-quiet\):hover:not\(:disabled\)/)
     assert.doesNotMatch(css, /\.oasub-button:hover:not\(:disabled\) \{[^}]*background:/)
     assert.match(css, /\.oasub-button:focus-visible \{ outline: 2px solid/)
     assert.match(css, /\.oasub-context > \.oasub-field \{ flex: none; \}/, 'A standalone custom field must not inherit the horizontal 180px flex basis')
     assert.match(css, /@media \(forced-colors: active\)/)
     assert.match(css, /\.oasub-button:disabled \{ border-color: GrayText; color: GrayText; opacity: 1; \}/)
   } finally { h.dispose() }
+})
+
+test('every button shares one host-aligned size, radius, and type scale', async () => {
+  const h = await mount()
+  try {
+    const css = h.document.styles.map((style) => style.textContent).join('\n')
+    const button = css.match(/^\.oasub-button \{([^}]+)\}/m)?.[1] ?? ''
+    assert.match(button, /display: inline-flex/)
+    assert.match(button, /min-height: 36px/)
+    assert.match(button, /padding: 0 16px/)
+    assert.match(button, /border-radius: 12px/)
+    assert.match(button, /font-size: 14px/)
+    assert.match(button, /font-weight: 500/)
+    assert.match(button, /line-height: 22px/)
+    // Variants and layout contexts may only change color and flex placement.
+    for (const [, selector, body] of css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]*?\.oasub-button[^{}]*?)\{([^}]+)\}/g)) {
+      if (selector?.trim() === '.oasub-button') continue
+      assert.doesNotMatch(body ?? '', /(^|[; ])(min-height|padding|border-radius|font-size|font-weight|line-height):/, 'Button geometry must stay in the single base rule: ' + selector)
+    }
+    assert.match(css, /\.oasub-manage-row > \.oasub-button \{ flex: none; \}/, 'Management rows must reuse the one button spec')
+    // Picker triggers and the code field are controls too: same border step and radius.
+    const control = css.match(/^\.oasub-picker-trigger, \.oasub-input-shell \{([^}]+)\}/m)?.[1] ?? ''
+    assert.match(control, /border: 1px solid var\(--oasub-control-border\)/)
+    assert.match(control, /border-radius: 12px/)
+    const code = css.match(/^\.oasub-code \{([^}]+)\}/m)?.[1] ?? ''
+    assert.match(code, /border: 1px solid var\(--oasub-control-border\)/)
+    assert.match(code, /border-radius: 12px/)
+  } finally { h.dispose() }
+})
+
+test('a connection state never shows two primary actions', async () => {
+  const states = [
+    { ...connected },
+    { ...connected, modelsSynced: false },
+    { ...connected, credentialState: 'expired' },
+    { ...connected, modelsSynced: false, credentialState: 'expired' },
+    disconnected,
+  ]
+  for (const status of states) {
+    const h = await mount({ configure: (h) => { h.status = { ...status } } })
+    try {
+      const primary = h.all('button').filter((node) => String(node.props.className).includes('primary'))
+      assert.ok(primary.length <= 1, 'At most one primary action: ' + h.text())
+      if (status.modelsSynced === false && status.credentialState === 'expired') {
+        assert.equal(h.button('Sync models').props.className, 'oasub-button', 'A pending credential repair keeps the sync action secondary')
+        assert.equal(h.button('Refresh authorization').props.className, 'oasub-button primary')
+      }
+    } finally { h.dispose() }
+  }
 })
 
 test('header stays flush and secondary connection controls are collapsed by default', async () => {
