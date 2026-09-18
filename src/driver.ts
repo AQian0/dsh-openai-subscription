@@ -1,6 +1,6 @@
-import type { ShellExecutor } from '@deepseek-ai/dsh-shell'
+import type { ShellExecutor, ShellProcess } from '@deepseek-ai/dsh-shell'
 import { setTimeout as delay } from 'node:timers/promises'
-import { SubscriptionError, oauthFailureCode } from './errors.js'
+import { SubscriptionError, failureCode, oauthFailureCode } from './errors.js'
 import { normalizeOAuthCredential, type OAuthCredential } from './oauth.js'
 import { buildNodeCommand } from './platform.js'
 
@@ -64,11 +64,23 @@ export async function runDeviceDriver(
   if (signal.aborted) return null
   const timeout = AbortSignal.timeout(options.timeoutMs ?? DEVICE_TIMEOUT)
   const combined = AbortSignal.any([signal, timeout])
-  const proc = shell.start(shell.resolve({
+  const spec = shell.resolve({
     command: buildNodeCommand(DRIVER_DEVICE, modulePath),
     signal: combined,
     stdoutMaxBytes: MAX_OUTPUT,
-  }))
+  })
+  let proc: ShellProcess
+  try {
+    // DSH 0.1.6+ resolves background handles asynchronously after launch
+    // preparation; awaiting also accepts executors that still return the
+    // handle synchronously, so both ShellExecutor contracts keep working.
+    proc = await shell.start(spec)
+  } catch (error) {
+    // Launch preparation failed before a handle existed; there is nothing to
+    // reap and no output was produced, so report a category without details.
+    if (signal.aborted) return null
+    throw new SubscriptionError(failureCode(error, 'process-exited'))
+  }
   let buffer = ''
   let total = 0
   let codeReceived = false

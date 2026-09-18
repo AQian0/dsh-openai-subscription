@@ -8,7 +8,7 @@ import type { ShellExecutor, ShellProcess } from '@deepseek-ai/dsh-shell'
 import { DRIVER_DEVICE, DRIVER_REFRESH, parseDriverMessage, runDeviceDriver, VERIFICATION_URL } from '../src/driver.js'
 import { FAILURE_CODES, SubscriptionError, oauthFailureCode } from '../src/errors.js'
 
-function harness(chunks: string[], running = false) {
+function harness(chunks: string[], running = false, options: { asyncStart?: boolean } = {}) {
   let killed = false
   const proc = {
     status: running ? 'running' : 'completed',
@@ -18,7 +18,9 @@ function harness(chunks: string[], running = false) {
   } as ShellProcess
   const shell = {
     resolve: (spec: unknown) => spec,
-    start: () => proc,
+    // DSH 0.1.6+ publishes handles asynchronously; older hosts return them
+    // synchronously. The driver must support both executor contracts.
+    start: () => (options.asyncStart === true ? Promise.resolve(proc) : proc),
   } as unknown as ShellExecutor
   return { proc, shell, killed: () => killed }
 }
@@ -125,6 +127,41 @@ test('driver checks sandbox denial stamped only after process close', async () =
     return true
   }
   await assert.rejects(runDeviceDriver(fake.shell, '/module', new AbortController().signal, () => {}), /access-denied/)
+})
+
+test('driver awaits asynchronously published process handles', async () => {
+  const notice = JSON.stringify({ type: 'notice', userCode: 'ABCD-1234' }) + '\n'
+  const { shell, killed } = harness([notice, result + '\n'], true, { asyncStart: true })
+  const received: unknown[] = []
+  assert.equal((await runDeviceDriver(shell, '/module', new AbortController().signal, (code, url) => received.push([code, url]), { pollMs: 1 }))?.access, 'private')
+  assert.deepEqual(received, [['ABCD-1234', VERIFICATION_URL]])
+  assert.equal(killed(), true)
+})
+
+test('driver categorizes launch preparation failures without leaking host errors', async () => {
+  for (const [error, code] of [
+    [Object.assign(new Error('spawn failed'), { code: 'EACCES' }), 'access-denied'],
+    [Object.assign(new Error('preparation failed'), { code: 'EPERM' }), 'access-denied'],
+    [new Error('provider infrastructure failed'), 'process-exited'],
+  ] as const) {
+    const shell = {
+      resolve: (spec: unknown) => spec,
+      start: () => Promise.reject(error),
+    } as unknown as ShellExecutor
+    await assert.rejects(runDeviceDriver(shell, '/module', new AbortController().signal, () => {}), {
+      name: 'SubscriptionError',
+      message: `[openai-subscription:${code}]`,
+    })
+  }
+})
+
+test('driver treats a launch rejection after cancellation as a clean stop', async () => {
+  const controller = new AbortController()
+  const shell = {
+    resolve: (spec: unknown) => spec,
+    start: () => new Promise((_resolve, reject) => { controller.abort(); reject(new Error('cancelled')) }),
+  } as unknown as ShellExecutor
+  assert.equal(await runDeviceDriver(shell, '/module', controller.signal, () => {}), null)
 })
 
 test('driver emits categorized failures without private diagnostics', async () => {
