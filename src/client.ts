@@ -462,6 +462,11 @@ window.__ModuleLoader__.load({
 .oasub-wrap {
   --oasub-section-inset: 20px;
   --oasub-card-border-width: 1px;
+  --oasub-dot-size: 8px;
+  /* Status rows and notices share one line box so a leading marker can be
+     centered on the first text line by arithmetic instead of guesswork. */
+  --oasub-status-line-height: 22px;
+  --oasub-notice-line-height: 18px;
   /* One control boundary for every button and picker: the host's own control
      border step, so plugin controls carry the same weight as DSH's. */
   --oasub-control-border: var(--dsw-alias-border-l3, rgba(15, 17, 21, .16));
@@ -503,9 +508,9 @@ window.__ModuleLoader__.load({
 }
 .oasub-status-line { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .oasub-status-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.oasub-status-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; line-height: 22px; }
+.oasub-status-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; line-height: var(--oasub-status-line-height); }
 .oasub-status-detail { color: var(--dsw-alias-label-tertiary, #81858c); font-size: 12px; line-height: 18px; }
-.oasub-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--dsw-alias-label-tertiary, #81858c); }
+.oasub-dot { flex: none; width: var(--oasub-dot-size); height: var(--oasub-dot-size); border-radius: 999px; background: var(--dsw-alias-label-tertiary, #81858c); }
 .oasub-dot.success { background: var(--dsw-alias-state-success-primary, #22c55e); }
 .oasub-dot.warning { background: var(--dsw-alias-state-warn-primary, #f59e0b); }
 .oasub-pill {
@@ -632,8 +637,11 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-secondary, #61666b);
   background: var(--dsw-alias-bg-layer-2, #f5f6f7);
   font-size: 12px;
-  line-height: 18px;
+  line-height: var(--oasub-notice-line-height);
 }
+/* The row stays top-aligned so wrapped text keeps a stable first line; the
+   marker therefore centers on that line instead of the row's top edge. */
+.oasub-notice > .oasub-dot { margin-top: calc((var(--oasub-notice-line-height) - var(--oasub-dot-size)) / 2); }
 .oasub-notice.success { border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary, #22c55e) 40%, transparent); }
 .oasub-notice.warning { border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #f59e0b) 45%, transparent); }
 .oasub-notice.error { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #dc2626) 45%, transparent); color: var(--dsw-alias-state-error-primary, #b91c1c); }
