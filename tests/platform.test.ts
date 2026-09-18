@@ -201,6 +201,10 @@ test('commands reject NUL in every argument rather than silently truncating', ()
   }
 })
 
+// Launching a shell is the slow part on Windows: PowerShell 5.1 can cold-start
+// for many seconds on a loaded runner, so bound it well above the observed cost.
+const SHELL_START_TIMEOUT_MS = 30_000
+
 test('native shell execution preserves Unicode, apostrophes and JavaScript metacharacters', () => {
   const script = [
     'import { pathToFileURL } from "node:url"',
@@ -214,7 +218,7 @@ test('native shell execution preserves Unicode, apostrophes and JavaScript metac
     const args = process.platform === 'win32'
       ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', preamble + command]
       : ['-c', command]
-    const result = spawnSync(shell, args, { encoding: 'utf8', timeout: 10_000 })
+    const result = spawnSync(shell, args, { encoding: 'utf8', timeout: SHELL_START_TIMEOUT_MS })
     assert.ifError(result.error)
     assert.equal(result.status, 0, result.stderr)
     assert.deepEqual(JSON.parse(result.stdout), {
